@@ -194,6 +194,10 @@
         <h2>Gestão de Inconsistências e Sanagem</h2>
         <div class="filter-controls">
           <div class="filter-group">
+            <label>Buscar Funcionário:</label>
+            <input type="text" id="filtroPendenciasFuncionario" placeholder="🔍 Nome ou Matrícula..." onkeyup="carregarPendencias()" style="padding: 5px 8px; border: 1px solid #cbd5e1; border-radius: 4px;">
+          </div>
+          <div class="filter-group">
             <label>Tipo de Pendência:</label>
             <select id="filtroTipoPendencia" onchange="carregarPendencias()">
               <option value="">Todos os Tipos</option>
@@ -213,6 +217,9 @@
           <div class="filter-group">
             <label>Mês/Ano:</label>
             <input type="month" id="filtroPendenciasMes" onchange="carregarPendencias()">
+          </div>
+          <div class="filter-group" style="align-self: flex-end;">
+            <button class="btn-excel" onclick="exportarPendenciasExcel()">📊 Exportar para Excel</button>
           </div>
         </div>
       </div>

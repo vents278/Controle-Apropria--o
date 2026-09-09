@@ -1,7 +1,9 @@
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, send_file
 import sqlite3
 from datetime import date, datetime
 import calendar
+import pandas as pd
+import io
 
 app = Flask(__name__)
 DB_NAME = "database.db"
@@ -92,6 +94,98 @@ def calcular_regras_horas(data_iso, horas_trabalhadas):
         "is_feriado": is_feriado,
         "dia_semana": dia_semana
     }
+
+def buscar_dados_pendencias(ano, mes, supervisor_filtro, tipo_filtro, busca_func):
+    _, num_dias = calendar.monthrange(ano, mes)
+    inicio_mes = f"{ano}-{mes:02d}-01"
+    fim_mes = f"{ano}-{mes:02d}-{num_dias:02d}"
+
+    pendencias = []
+
+    with sqlite3.connect(DB_NAME) as conn:
+        cursor = conn.cursor()
+
+        query = '''
+            SELECT p.data, f.id, f.nome, f.matricula, f.supervisor, p.situacao, p.status_pendencia, COALESCE(SUM(a.horas), 0) as total_horas
+            FROM presencas p
+            JOIN funcionarios f ON p.funcionario_id = f.id
+            LEFT JOIN apropriacoes a ON p.funcionario_id = a.funcionario_id AND p.data = a.data
+            WHERE p.data BETWEEN ? AND ?
+        '''
+        params = [inicio_mes, fim_mes]
+
+        if supervisor_filtro:
+            query += " AND f.supervisor = ?"
+            params.append(supervisor_filtro)
+
+        query += " GROUP BY p.data, p.funcionario_id"
+        cursor.execute(query, params)
+
+        for row in cursor.fetchall():
+            d_data, f_id, nome, matricula, supervisor, situacao, st_pend, horas = row
+            status_atual = st_pend or "PENDENTE"
+
+            if status_atual == "SANADA":
+                continue
+
+            if busca_func:
+                termo = busca_func.lower()
+                if termo not in nome.lower() and (not matricula or termo not in matricula.lower()):
+                    continue
+
+            item_pendencia = None
+
+            if situacao == 'Deslocado' and horas == 0:
+                item_pendencia = {
+                    "data": d_data, "funcionario_id": f_id, "funcionario": nome,
+                    "matricula": matricula or "-", "supervisor": supervisor or "Não informado",
+                    "horas_trabalhadas": horas, "carga_padrao": 0, "adicional_tipo": "DESLOCADO",
+                    "horas_extras": 0, "status_pendencia": status_atual,
+                    "mensagem": "Funcionário Deslocado sem lançamento de Ordens de Serviço (OS)."
+                }
+            elif situacao in ['Presente', 'Deslocado']:
+                calc = calcular_regras_horas(d_data, horas)
+                carga = calc["carga_padrao"]
+                
+                if calc["horas_100"] > 0:
+                    motivo = "Trabalho em Domingo" if calc["dia_semana"] == 6 else "Trabalho em Feriado"
+                    item_pendencia = {
+                        "data": d_data, "funcionario_id": f_id, "funcionario": nome,
+                        "matricula": matricula or "-", "supervisor": supervisor or "Não informado",
+                        "horas_trabalhadas": horas, "carga_padrao": 0, "adicional_tipo": "100%",
+                        "horas_extras": calc["horas_100"], "status_pendencia": status_atual,
+                        "mensagem": f"{motivo}: {calc['horas_100']:.1f}h extras (100%)."
+                    }
+                elif calc["horas_70"] > 0:
+                    item_pendencia = {
+                        "data": d_data, "funcionario_id": f_id, "funcionario": nome,
+                        "matricula": matricula or "-", "supervisor": supervisor or "Não informado",
+                        "horas_trabalhadas": horas, "carga_padrao": 0, "adicional_tipo": "70%",
+                        "horas_extras": calc["horas_70"], "status_pendencia": status_atual,
+                        "mensagem": f"Trabalho em Sábado: {calc['horas_70']:.1f}h extras (70%)."
+                    }
+                elif calc["horas_50"] > 0:
+                    item_pendencia = {
+                        "data": d_data, "funcionario_id": f_id, "funcionario": nome,
+                        "matricula": matricula or "-", "supervisor": supervisor or "Não informado",
+                        "horas_trabalhadas": horas, "carga_padrao": carga, "adicional_tipo": "50%",
+                        "horas_extras": calc["horas_50"], "status_pendencia": status_atual,
+                        "mensagem": f"Excedeu jornada ({carga:.0f}h): {calc['horas_50']:.1f}h extras (50%)."
+                    }
+                elif carga > 0 and horas < carga:
+                    item_pendencia = {
+                        "data": d_data, "funcionario_id": f_id, "funcionario": nome,
+                        "matricula": matricula or "-", "supervisor": supervisor or "Não informado",
+                        "horas_trabalhadas": horas, "carga_padrao": carga, "adicional_tipo": "INCOMPLETA",
+                        "horas_extras": 0, "status_pendencia": status_atual,
+                        "mensagem": f"Jornada incompleta: Apontado {horas:.1f}h de {carga:.0f}h exigidas."
+                    }
+
+            if item_pendencia:
+                if not tipo_filtro or item_pendencia["adicional_tipo"] == tipo_filtro:
+                    pendencias.append(item_pendencia)
+
+    return pendencias
 
 @app.route('/')
 def index():
@@ -254,7 +348,7 @@ def obter_grade():
         "lancamentos": lancamentos
     })
 
-# --- PENDÊNCIAS E SANAGEM ---
+# --- PENDÊNCIAS E EXPORTAÇÃO EXCEL ---
 
 @app.route('/api/pendencias', methods=['GET'])
 def obter_pendencias():
@@ -262,98 +356,62 @@ def obter_pendencias():
     mes = int(request.args.get('mes', date.today().month))
     supervisor_filtro = request.args.get('supervisor', '')
     tipo_filtro = request.args.get('tipo', '')
-
-    _, num_dias = calendar.monthrange(ano, mes)
-    inicio_mes = f"{ano}-{mes:02d}-01"
-    fim_mes = f"{ano}-{mes:02d}-{num_dias:02d}"
-
-    pendencias = []
+    busca_func = request.args.get('funcionario', '')
 
     with sqlite3.connect(DB_NAME) as conn:
         cursor = conn.cursor()
-
         cursor.execute("SELECT DISTINCT supervisor FROM funcionarios WHERE supervisor IS NOT NULL AND supervisor != '' ORDER BY supervisor")
         supervisores = [r[0] for r in cursor.fetchall()]
 
-        query = '''
-            SELECT p.data, f.id, f.nome, f.supervisor, p.situacao, p.status_pendencia, COALESCE(SUM(a.horas), 0) as total_horas
-            FROM presencas p
-            JOIN funcionarios f ON p.funcionario_id = f.id
-            LEFT JOIN apropriacoes a ON p.funcionario_id = a.funcionario_id AND p.data = a.data
-            WHERE p.data BETWEEN ? AND ?
-        '''
-        params = [inicio_mes, fim_mes]
-
-        if supervisor_filtro:
-            query += " AND f.supervisor = ?"
-            params.append(supervisor_filtro)
-
-        query += " GROUP BY p.data, p.funcionario_id"
-        cursor.execute(query, params)
-
-        for row in cursor.fetchall():
-            d_data, f_id, nome, supervisor, situacao, st_pend, horas = row
-            status_atual = st_pend or "PENDENTE"
-
-            if status_atual == "SANADA":
-                continue
-
-            item_pendencia = None
-
-            if situacao == 'Deslocado' and horas == 0:
-                item_pendencia = {
-                    "data": d_data, "funcionario_id": f_id, "funcionario": nome,
-                    "supervisor": supervisor or "Não informado",
-                    "horas_trabalhadas": horas, "carga_padrao": 0, "adicional_tipo": "DESLOCADO",
-                    "horas_extras": 0, "status_pendencia": status_atual,
-                    "mensagem": "Funcionário Deslocado sem lançamento de Ordens de Serviço (OS)."
-                }
-            elif situacao in ['Presente', 'Deslocado']:
-                calc = calcular_regras_horas(d_data, horas)
-                carga = calc["carga_padrao"]
-                
-                if calc["horas_100"] > 0:
-                    motivo = "Trabalho em Domingo" if calc["dia_semana"] == 6 else "Trabalho em Feriado"
-                    item_pendencia = {
-                        "data": d_data, "funcionario_id": f_id, "funcionario": nome,
-                        "supervisor": supervisor or "Não informado",
-                        "horas_trabalhadas": horas, "carga_padrao": 0, "adicional_tipo": "100%",
-                        "horas_extras": calc["horas_100"], "status_pendencia": status_atual,
-                        "mensagem": f"{motivo}: {calc['horas_100']:.1f}h extras (100%)."
-                    }
-                elif calc["horas_70"] > 0:
-                    item_pendencia = {
-                        "data": d_data, "funcionario_id": f_id, "funcionario": nome,
-                        "supervisor": supervisor or "Não informado",
-                        "horas_trabalhadas": horas, "carga_padrao": 0, "adicional_tipo": "70%",
-                        "horas_extras": calc["horas_70"], "status_pendencia": status_atual,
-                        "mensagem": f"Trabalho em Sábado: {calc['horas_70']:.1f}h extras (70%)."
-                    }
-                elif calc["horas_50"] > 0:
-                    item_pendencia = {
-                        "data": d_data, "funcionario_id": f_id, "funcionario": nome,
-                        "supervisor": supervisor or "Não informado",
-                        "horas_trabalhadas": horas, "carga_padrao": carga, "adicional_tipo": "50%",
-                        "horas_extras": calc["horas_50"], "status_pendencia": status_atual,
-                        "mensagem": f"Excedeu jornada ({carga:.0f}h): {calc['horas_50']:.1f}h extras (50%)."
-                    }
-                elif carga > 0 and horas < carga:
-                    item_pendencia = {
-                        "data": d_data, "funcionario_id": f_id, "funcionario": nome,
-                        "supervisor": supervisor or "Não informado",
-                        "horas_trabalhadas": horas, "carga_padrao": carga, "adicional_tipo": "INCOMPLETA",
-                        "horas_extras": 0, "status_pendencia": status_atual,
-                        "mensagem": f"Jornada incompleta: Apontado {horas:.1f}h de {carga:.0f}h exigidas."
-                    }
-
-            if item_pendencia:
-                if not tipo_filtro or item_pendencia["adicional_tipo"] == tipo_filtro:
-                    pendencias.append(item_pendencia)
+    pendencias = buscar_dados_pendencias(ano, mes, supervisor_filtro, tipo_filtro, busca_func)
 
     return jsonify({
         "pendencias": pendencias,
         "supervisores": supervisores
     })
+
+@app.route('/api/pendencias/exportar_excel', methods=['GET'])
+def exportar_pendencias_excel():
+    ano = int(request.args.get('ano', date.today().year))
+    mes = int(request.args.get('mes', date.today().month))
+    supervisor_filtro = request.args.get('supervisor', '')
+    tipo_filtro = request.args.get('tipo', '')
+    busca_func = request.args.get('funcionario', '')
+
+    pendencias = buscar_dados_pendencias(ano, mes, supervisor_filtro, tipo_filtro, busca_func)
+
+    dados_excel = []
+    for item in pendencias:
+        dt_br = item['data'].split("-")[::-1]
+        dt_formatted = "/".join(dt_br)
+        dados_excel.append({
+            "Data": dt_formatted,
+            "Matrícula": item.get('matricula', '-'),
+            "Funcionário": item['funcionario'],
+            "Supervisor": item['supervisor'],
+            "Horas Lançadas": item['horas_trabalhadas'],
+            "Jornada Exigida": f"{item['carga_padrao']}h" if item['carga_padrao'] > 0 else "Fora da Jornada",
+            "Horas Extras": item['horas_extras'],
+            "Tipo Pendência": item['adicional_tipo'],
+            "Status": "PENDENTE",
+            "Ocorrência / Motivo": item['mensagem']
+        })
+
+    df = pd.DataFrame(dados_excel)
+    
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name='Pendencias')
+    
+    output.seek(0)
+    nome_arquivo = f"Relatorio_Pendencias_{ano}_{mes:02d}.xlsx"
+
+    return send_file(
+        output,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        as_attachment=True,
+        download_name=nome_arquivo
+    )
 
 @app.route('/api/pendencias/sanar', methods=['POST'])
 def sanar_pendencia():

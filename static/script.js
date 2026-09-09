@@ -312,13 +312,14 @@ function aplicarFiltrosGrade() {
   });
 }
 
-// 2. PAINEL DE PENDÊNCIAS COM FILTRO DE TIPO
+// 2. PAINEL DE PENDÊNCIAS COM FILTROS E EXPORTAÇÃO
 async function carregarPendencias() {
   const [ano, mes] = document.getElementById("filtroPendenciasMes").value.split("-");
   const supervisor = document.getElementById("filtroPendenciasSupervisor").value;
   const tipo = document.getElementById("filtroTipoPendencia").value;
+  const func = document.getElementById("filtroPendenciasFuncionario").value;
 
-  const res = await fetch(`/api/pendencias?ano=${ano}&mes=${mes}&supervisor=${encodeURIComponent(supervisor)}&tipo=${encodeURIComponent(tipo)}`);
+  const res = await fetch(`/api/pendencias?ano=${ano}&mes=${mes}&supervisor=${encodeURIComponent(supervisor)}&tipo=${encodeURIComponent(tipo)}&funcionario=${encodeURIComponent(func)}`);
   const data = await res.json();
 
   const selectSup = document.getElementById("filtroPendenciasSupervisor");
@@ -356,6 +357,16 @@ async function carregarPendencias() {
       </tr>
     `;
   });
+}
+
+function exportarPendenciasExcel() {
+  const [ano, mes] = document.getElementById("filtroPendenciasMes").value.split("-");
+  const supervisor = document.getElementById("filtroPendenciasSupervisor").value;
+  const tipo = document.getElementById("filtroTipoPendencia").value;
+  const func = document.getElementById("filtroPendenciasFuncionario").value;
+
+  const query = `ano=${ano}&mes=${mes}&supervisor=${encodeURIComponent(supervisor)}&tipo=${encodeURIComponent(tipo)}&funcionario=${encodeURIComponent(func)}`;
+  window.location.href = `/api/pendencias/exportar_excel?${query}`;
 }
 
 async function sanarEsumir(fId, dataIso) {
