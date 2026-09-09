@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ERP - Apropriação & Presença</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+
+  <header class="header">
+    <div class="logo"><strong>ERP</strong> Gestão de Horas e Presença</div>
+    <nav>
+      <button class="nav-btn active" onclick="mostrarPagina('paginaDashboard', event)">Dashboard Analytics</button>
+      <button class="nav-btn" onclick="mostrarPagina('paginaOS', event)">Lançamento de OS</button>
+      <button class="nav-btn" onclick="mostrarPagina('paginaGrade', event)">Grade de Presença</button>
+      <button class="nav-btn" onclick="mostrarPagina('paginaPendencias', event)">Pendências & Horas Extras</button>
+      <button class="nav-btn" onclick="mostrarPagina('paginaTarefas', event)">Quadro de Tarefas</button>
+      <button class="nav-btn" onclick="mostrarPagina('paginaCadastro', event)">Cadastros</button>
+    </nav>
+  </header>
+
+  <main class="main-container">
+
+    <!-- 0. DASHBOARD ANALYTICS -->
+    <section id="paginaDashboard" class="page active">
+      <div class="filter-bar">
+        <h2>Painel Geral e Indicadores Gerenciais</h2>
+        <div class="filter-controls">
+          <div class="filter-group">
+            <label>Mês/Ano:</label>
+            <input type="month" id="filtroDashboardMes" onchange="carregarDashboard()">
+          </div>
+        </div>
+      </div>
+
+      <div class="kpi-grid">
+        <div class="kpi-card danger">
+          <div class="kpi-title">Pendências Ativas</div>
+          <div class="kpi-value" id="kpiPendencias">0</div>
+          <div class="kpi-desc">Inconsistências a sanar</div>
+        </div>
+        <div class="kpi-card warning">
+          <div class="kpi-title">Total Horas Extras</div>
+          <div class="kpi-value" id="kpiHorasExtras">0.0h</div>
+          <div class="kpi-desc">Acumulado 50%, 70% e 100%</div>
+        </div>
+        <div class="kpi-card info">
+          <div class="kpi-title">Pessoas em Treinamento</div>
+          <div class="kpi-value" id="kpiTreinamento">0</div>
+          <div class="kpi-desc">Colaboradores no mês</div>
+        </div>
+      </div>
+
+      <div class="dash-row">
+        <div class="dash-card">
+          <h3>Funcionários por Faixa de Hora Extra</h3>
+          <p class="sub-text">Contagem de colaboradores únicos que realizaram HE no mês:</p>
+          <div class="he-summary-grid">
+            <div class="he-box">
+              <span class="he-tag font-50">HE 50%</span>
+              <span class="he-num" id="dashFunc50">0</span>
+              <span class="he-lbl">Colaboradores</span>
+            </div>
+            <div class="he-box">
+              <span class="he-tag font-70">HE 70%</span>
+              <span class="he-num" id="dashFunc70">0</span>
+              <span class="he-lbl">Colaboradores</span>
+            </div>
+            <div class="he-box">
+              <span class="he-tag font-100">HE 100%</span>
+              <span class="he-num" id="dashFunc100">0</span>
+              <span class="he-lbl">Colaboradores</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="dash-card">
+          <h3>Pessoas em Treinamento por Dia</h3>
+          <p class="sub-text">Volume diário de participações em capacitação:</p>
+          <div class="table-scroll-wrapper" style="max-height: 220px; overflow-y: auto;">
+            <table class="grid-table">
+              <thead>
+                <tr>
+                  <th>Data</th>
+                  <th>Colaboradores Treinando</th>
+                </tr>
+              </thead>
+              <tbody id="tabelaTreinamentosDiarios"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- LANÇAMENTO DE ORDEM DE SERVIÇO (OS) -->
+    <section id="paginaOS" class="page">
+      <h2>Lançamento de Ordem de Serviço (OS)</h2>
+      <form id="formLancamentoOS" class="card-form" style="max-width: 650px;">
+        <div class="form-group">
+          <label>Número da OS:</label>
+          <input type="text" id="osNumero" required placeholder="Ex: OS-4020">
+        </div>
+        <div class="form-group">
+          <label>Descrição da OS:</label>
+          <textarea id="osDescricao" rows="2" placeholder="Descreva os serviços executados nesta OS..."></textarea>
+        </div>
+        <div class="form-group">
+          <label>Data de Execução:</label>
+          <input type="date" id="osData" required>
+        </div>
+        <div class="form-group">
+          <label>Horas Lançadas por Funcionário:</label>
+          <input type="number" id="osHoras" step="0.5" min="0.5" required placeholder="Ex: 8.0">
+        </div>
+
+        <div class="form-group">
+          <label>Pesquisar e Adicionar Funcionários:</label>
+          <div class="autocomplete-wrapper">
+            <input type="text" id="osPesquisaFuncionario" placeholder="🔍 Digite o nome, matrícula ou cargo..." onkeyup="pesquisarFuncionariosOS(this.value)">
+            <ul id="listaSugestoesOS" class="autocomplete-list"></ul>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>Funcionários Selecionados na OS:</label>
+          <div id="containerTagFuncionariosOS" class="tags-container">
+            <span class="placeholder-text">Nenhum funcionário adicionado ainda.</span>
+          </div>
+        </div>
+
+        <button type="submit" class="btn-primary full-width" style="margin-top: 15px;">Lançar OS e Atualizar Presença</button>
+      </form>
+    </section>
+
+    <!-- 1. GRADE MATRICIAL -->
+    <section id="paginaGrade" class="page">
+      <div class="filter-bar">
+        <h2>Matriz Diária de Presença e Apropriação</h2>
+        <div class="filter-controls">
+          <div class="filter-group">
+            <label>Buscar:</label>
+            <input type="text" id="filtroGradeBusca" placeholder="🔍 Nome, Matrícula..." onkeyup="aplicarFiltrosGrade()" style="padding: 5px 8px; border: 1px solid #cbd5e1; border-radius: 4px;">
+          </div>
+          <div class="filter-group">
+            <label>Área / Atuação:</label>
+            <select id="filtroArea" onchange="aplicarFiltrosGrade()">
+              <option value="">Todas as Áreas</option>
+            </select>
+          </div>
+          <div class="filter-group">
+            <label>Situação:</label>
+            <select id="filtroGradeSituacao" onchange="aplicarFiltrosGrade()">
+              <option value="">Todas as Situações</option>
+              <option value="Presente">Presente</option>
+              <option value="Deslocado">Deslocado</option>
+              <option value="Falta">Falta</option>
+              <option value="Folga">Folga</option>
+              <option value="Treinamento">Treinamento</option>
+              <option value="COM_EXTRA">Com Horas Extras</option>
+              <option value="INCOMPLETO">Jornada Incompleta</option>
+            </select>
+          </div>
+          <div class="filter-group">
+            <label>Supervisor:</label>
+            <select id="filtroSupervisor" onchange="carregarGrade()">
+              <option value="">Todos os Supervisores</option>
+            </select>
+          </div>
+          <div class="filter-group">
+            <label>Mês/Ano:</label>
+            <input type="month" id="filtroMesAno" onchange="carregarGrade()">
+          </div>
+        </div>
+      </div>
+
+      <div class="table-scroll-wrapper">
+        <table class="grid-table">
+          <thead>
+            <tr id="gridHeader">
+              <th class="col-fixed">Funcionário</th>
+              <th class="col-fixed">Cargo</th>
+              <th class="col-fixed">Atuação</th>
+            </tr>
+          </thead>
+          <tbody id="gridBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- 2. PAINEL DE PENDÊNCIAS -->
+    <section id="paginaPendencias" class="page">
+      <div class="filter-bar">
+        <h2>Gestão de Inconsistências e Sanagem</h2>
+        <div class="filter-controls">
+          <div class="filter-group">
+            <label>Tipo de Pendência:</label>
+            <select id="filtroTipoPendencia" onchange="carregarPendencias()">
+              <option value="">Todos os Tipos</option>
+              <option value="50%">Hora Extra 50%</option>
+              <option value="70%">Hora Extra 70%</option>
+              <option value="100%">Hora Extra 100%</option>
+              <option value="DESLOCADO">Deslocado Sem OS</option>
+              <option value="INCOMPLETA">Jornada Incompleta</option>
+            </select>
+          </div>
+          <div class="filter-group">
+            <label>Supervisor:</label>
+            <select id="filtroPendenciasSupervisor" onchange="carregarPendencias()">
+              <option value="">Todos os Supervisores</option>
+            </select>
+          </div>
+          <div class="filter-group">
+            <label>Mês/Ano:</label>
+            <input type="month" id="filtroPendenciasMes" onchange="carregarPendencias()">
+          </div>
+        </div>
+      </div>
+
+      <div class="table-scroll-wrapper" style="margin-top: 15px;">
+        <table class="grid-table">
+          <thead>
+            <tr>
+              <th>Data</th>
+              <th>Funcionário</th>
+              <th>Supervisor</th>
+              <th>Lançado</th>
+              <th>Jornada Exigida</th>
+              <th>Adicional / Extras</th>
+              <th>Status</th>
+              <th>Motivo / Ocorrência</th>
+              <th>Ação</th>
+            </tr>
+          </thead>
+          <tbody id="tabelaPendencias"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- 3. QUADRO DE TAREFAS (TRELLO) -->
+    <section id="paginaTarefas" class="page">
+      <div class="filter-bar">
+        <h2>Quadro de Tarefas</h2>
+        <button class="btn-primary" onclick="abrirModalNovaTarefa()">+ Nova Tarefa</button>
+      </div>
+
+      <div class="kanban-board">
+        <div class="kanban-column" ondragover="allowDrop(event)" ondrop="drop(event, 'A Fazer')">
+          <div class="kanban-header column-todo">A Fazer <span id="cnt-todo" class="kanban-badge">0</span></div>
+          <div class="kanban-cards" id="col-todo"></div>
+        </div>
+
+        <div class="kanban-column" ondragover="allowDrop(event)" ondrop="drop(event, 'Em Andamento')">
+          <div class="kanban-header column-doing">Em Andamento <span id="cnt-doing" class="kanban-badge">0</span></div>
+          <div class="kanban-cards" id="col-doing"></div>
+        </div>
+
+        <div class="kanban-column" ondragover="allowDrop(event)" ondrop="drop(event, 'Concluído')">
+          <div class="kanban-header column-done">Concluído <span id="cnt-done" class="kanban-badge">0</span></div>
+          <div class="kanban-cards" id="col-done"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 4. CADASTROS -->
+    <section id="paginaCadastro" class="page">
+      <h2 id="tituloFormCadastro">Cadastrar Novo Funcionário</h2>
+      <form id="formCadastro" class="card-form">
+        <input type="hidden" id="cadId">
+        <div class="form-group">
+          <label>Matrícula:</label>
+          <input type="text" id="cadMatricula" required placeholder="Ex: 041949">
+        </div>
+        <div class="form-group">
+          <label>Nome Completo:</label>
+          <input type="text" id="cadNome" required placeholder="Ex: Vinícius Fabiano">
+        </div>
+        <div class="form-group">
+          <label>Cargo:</label>
+          <input type="text" id="cadCargo" required placeholder="Ex: Mecânico Manutenção II">
+        </div>
+        <div class="form-group">
+          <label>Atuação / Área:</label>
+          <input type="text" id="cadAtuacao" placeholder="Ex: TURNO C ou INDIRETO">
+        </div>
+        <div class="form-group">
+          <label>Início das Atividades em Área:</label>
+          <input type="date" id="cadInicioAtividades">
+        </div>
+        <div class="form-group">
+          <label>Supervisor Responsável:</label>
+          <input type="text" id="cadSupervisor" placeholder="Ex: João da Silva">
+        </div>
+        <div class="button-group">
+          <button type="submit" id="btnSalvarCad" class="btn-primary">Salvar Funcionário</button>
+          <button type="button" id="btnCancelarEdit" class="btn-secondary" style="display:none;" onclick="limparFormularioCadastro()">Cancelar Edição</button>
+        </div>
+      </form>
+
+      <div class="section-header-cad">
+        <h3>Equipe Cadastrada</h3>
+        <div class="search-box">
+          <input type="text" id="inputPesquisaFuncionario" onkeyup="filtrarTabelaCadastros()" placeholder="🔍 Pesquisar por nome, matrícula, cargo...">
+        </div>
+      </div>
+
+      <div class="table-scroll-wrapper" style="margin-top: 10px;">
+        <table class="grid-table">
+          <thead>
+            <tr>
+              <th>Matrícula</th>
+              <th>Nome</th>
+              <th>Cargo</th>
+              <th>Atuação</th>
+              <th>Início Área</th>
+              <th>Supervisor</th>
+              <th>Ação</th>
+            </tr>
+          </thead>
+          <tbody id="tabelaFuncionariosCadastrados"></tbody>
+        </table>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- MODAL DE LANÇAMENTO DIÁRIO -->
+  <div id="modalLancamento" class="modal">
+    <div class="modal-content">
+      <span class="close-btn" onclick="fecharModal()">&times;</span>
+      <h3>Lançamento Diário: <span id="modalDataTitulo"></span></h3>
+      <p id="modalFuncionarioNome" class="sub-title"></p>
+
+      <form id="formModal">
+        <div class="form-group">
+          <label>Situação:</label>
+          <select id="modalSituacao" onchange="alternarApropriacaoModal()" required>
+            <option value="Presente">Presente</option>
+            <option value="Deslocado">Deslocado</option>
+            <option value="Falta">Falta</option>
+            <option value="Folga">Folga</option>
+            <option value="Treinamento">Treinamento</option>
+          </select>
+        </div>
+
+        <div id="modalSecaoApropriacao" class="card-box">
+          <h4>Apropriação de Horas por OS</h4>
+          <div class="form-row">
+            <input type="text" id="modalOS" placeholder="Nº OS">
+            <input type="number" id="modalHoras" step="0.5" min="0.5" placeholder="Horas">
+            <button type="button" class="btn-secondary" onclick="adicionarOSModal()">+ OS</button>
+          </div>
+          <ul id="modalListaOS" class="os-list"></ul>
+        </div>
+
+        <div class="form-group margin-top">
+          <label>Observação / Justificativa:</label>
+          <textarea id="modalObs" rows="2" placeholder="Observações do dia..."></textarea>
+        </div>
+
+        <button type="submit" class="btn-primary full-width">Salvar Lançamento</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL INFORMAÇÕES DO FUNCIONÁRIO -->
+  <div id="modalInfoFuncionario" class="modal">
+    <div class="modal-content" style="width: 500px;">
+      <span class="close-btn" onclick="fecharModalInfoFuncionario()">&times;</span>
+      <h3>Ficha do Colaborador</h3>
+      
+      <div id="infoFuncionarioBody" class="info-func-container">
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL NOVA TAREFA -->
+  <div id="modalTarefa" class="modal">
+    <div class="modal-content">
+      <span class="close-btn" onclick="fecharModalTarefa()">&times;</span>
+      <h3>Criar Nova Tarefa</h3>
+      <form id="formTarefa" onsubmit="salvarTarefa(event)">
+        <div class="form-group">
+          <label>Título:</label>
+          <input type="text" id="tarTitulo" required placeholder="Ex: Manutenção preventiva OS 4020">
+        </div>
+        <div class="form-group">
+          <label>Descrição:</label>
+          <textarea id="tarDescricao" rows="3" placeholder="Detalhes da tarefa..."></textarea>
+        </div>
+        <div class="form-group">
+          <label>Responsável:</label>
+          <input type="text" id="tarResponsavel" placeholder="Ex: Vinícius Fabiano">
+        </div>
+        <div class="form-group">
+          <label>Prioridade:</label>
+          <select id="tarPrioridade">
+            <option value="Baixa">Baixa</option>
+            <option value="Média" selected>Média</option>
+            <option value="Alta">Alta</option>
+          </select>
+        </div>
+        <button type="submit" class="btn-primary full-width">Criar Tarefa</button>
+      </form>
+    </div>
+  </div>
+
+  <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
