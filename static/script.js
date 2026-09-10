@@ -312,14 +312,17 @@ function aplicarFiltrosGrade() {
   });
 }
 
-// 2. PAINEL DE PENDÊNCIAS COM FILTROS E EXPORTAÇÃO
+// 2. PAINEL DE PENDÊNCIAS COM FILTROS DE DATA E EXPORTAÇÃO
 async function carregarPendencias() {
   const [ano, mes] = document.getElementById("filtroPendenciasMes").value.split("-");
   const supervisor = document.getElementById("filtroPendenciasSupervisor").value;
   const tipo = document.getElementById("filtroTipoPendencia").value;
   const func = document.getElementById("filtroPendenciasFuncionario").value;
+  const dataInicio = document.getElementById("filtroPendenciasDataInicio").value;
+  const dataFim = document.getElementById("filtroPendenciasDataFim").value;
 
-  const res = await fetch(`/api/pendencias?ano=${ano}&mes=${mes}&supervisor=${encodeURIComponent(supervisor)}&tipo=${encodeURIComponent(tipo)}&funcionario=${encodeURIComponent(func)}`);
+  const url = `/api/pendencias?ano=${ano}&mes=${mes}&supervisor=${encodeURIComponent(supervisor)}&tipo=${encodeURIComponent(tipo)}&funcionario=${encodeURIComponent(func)}&data_inicio=${dataInicio}&data_fim=${dataFim}`;
+  const res = await fetch(url);
   const data = await res.json();
 
   const selectSup = document.getElementById("filtroPendenciasSupervisor");
@@ -364,8 +367,10 @@ function exportarPendenciasExcel() {
   const supervisor = document.getElementById("filtroPendenciasSupervisor").value;
   const tipo = document.getElementById("filtroTipoPendencia").value;
   const func = document.getElementById("filtroPendenciasFuncionario").value;
+  const dataInicio = document.getElementById("filtroPendenciasDataInicio").value;
+  const dataFim = document.getElementById("filtroPendenciasDataFim").value;
 
-  const query = `ano=${ano}&mes=${mes}&supervisor=${encodeURIComponent(supervisor)}&tipo=${encodeURIComponent(tipo)}&funcionario=${encodeURIComponent(func)}`;
+  const query = `ano=${ano}&mes=${mes}&supervisor=${encodeURIComponent(supervisor)}&tipo=${encodeURIComponent(tipo)}&funcionario=${encodeURIComponent(func)}&data_inicio=${dataInicio}&data_fim=${dataFim}`;
   window.location.href = `/api/pendencias/exportar_excel?${query}`;
 }
 
@@ -629,11 +634,22 @@ function fecharModalInfoFuncionario() {
   document.getElementById("modalInfoFuncionario").style.display = "none";
 }
 
-// 6. CADASTRO E PESQUISA DE FUNCIONÁRIOS
+// 6. CADASTRO, FILTRO E EXCLUSÃO DE FUNCIONÁRIOS
 async function carregarListaCadastro() {
   const res = await fetch('/api/funcionarios');
   listaFuncionariosCache = await res.json();
-  renderizarTabelaCadastros(listaFuncionariosCache);
+  
+  const selectArea = document.getElementById("filtroCadastroArea");
+  if (selectArea) {
+    const areas = [...new Set(listaFuncionariosCache.map(f => f.atuacao).filter(Boolean))];
+    const valAtual = selectArea.value;
+    selectArea.innerHTML = `<option value="">Todas as Áreas de Atuação</option>`;
+    areas.forEach(a => {
+      selectArea.innerHTML += `<option value="${a}" ${a === valAtual ? 'selected' : ''}>${a}</option>`;
+    });
+  }
+
+  filtrarTabelaCadastros();
 }
 
 function renderizarTabelaCadastros(lista) {
@@ -655,7 +671,10 @@ function renderizarTabelaCadastros(lista) {
         <td>${f.atuacao}</td>
         <td>${dataInicioBr}</td>
         <td>${f.supervisor || '-'}</td>
-        <td><button class="btn-secondary" onclick="prepararEdicao(${f.id})">Editar</button></td>
+        <td>
+          <button class="btn-secondary" onclick="prepararEdicao(${f.id})">Editar</button>
+          <button class="btn-danger" onclick="excluirFuncionario(${f.id}, '${f.nome}')">Excluir</button>
+        </td>
       </tr>
     `;
   });
@@ -663,21 +682,36 @@ function renderizarTabelaCadastros(lista) {
 
 function filtrarTabelaCadastros() {
   const termo = document.getElementById("inputPesquisaFuncionario").value.toLowerCase().trim();
+  const areaFiltro = document.getElementById("filtroCadastroArea").value;
   
-  if (!termo) {
-    renderizarTabelaCadastros(listaFuncionariosCache);
-    return;
-  }
-
-  const filtrados = listaFuncionariosCache.filter(f => 
-    (f.nome && f.nome.toLowerCase().includes(termo)) ||
-    (f.matricula && f.matricula.toLowerCase().includes(termo)) ||
-    (f.cargo && f.cargo.toLowerCase().includes(termo)) ||
-    (f.supervisor && f.supervisor.toLowerCase().includes(termo)) ||
-    (f.atuacao && f.atuacao.toLowerCase().includes(termo))
-  );
+  const filtrados = listaFuncionariosCache.filter(f => {
+    const atendeTermo = !termo || (
+      (f.nome && f.nome.toLowerCase().includes(termo)) ||
+      (f.matricula && f.matricula.toLowerCase().includes(termo)) ||
+      (f.cargo && f.cargo.toLowerCase().includes(termo)) ||
+      (f.supervisor && f.supervisor.toLowerCase().includes(termo))
+    );
+    const atendeArea = !areaFiltro || f.atuacao === areaFiltro;
+    return atendeTermo && atendeArea;
+  });
 
   renderizarTabelaCadastros(filtrados);
+}
+
+async function excluirFuncionario(id, nome) {
+  if (!confirm(`Tem certeza que deseja excluir o colaborador "${nome}"? Todos os históricos de presenças e apropriações dele também serão removidos.`)) return;
+
+  const res = await fetch(`/api/funcionarios?id=${id}`, { method: 'DELETE' });
+  const data = await res.json();
+
+  if (res.ok) {
+    alert(data.mensagem);
+    carregarListaCadastro();
+    carregarGrade();
+    carregarDashboard();
+  } else {
+    alert(data.erro || "Erro ao excluir funcionário.");
+  }
 }
 
 function prepararEdicao(id) {

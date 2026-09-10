@@ -218,6 +218,14 @@
             <label>Mês/Ano:</label>
             <input type="month" id="filtroPendenciasMes" onchange="carregarPendencias()">
           </div>
+          <div class="filter-group">
+            <label>Data Início:</label>
+            <input type="date" id="filtroPendenciasDataInicio" onchange="carregarPendencias()">
+          </div>
+          <div class="filter-group">
+            <label>Data Fim:</label>
+            <input type="date" id="filtroPendenciasDataFim" onchange="carregarPendencias()">
+          </div>
           <div class="filter-group" style="align-self: flex-end;">
             <button class="btn-excel" onclick="exportarPendenciasExcel()">📊 Exportar para Excel</button>
           </div>
@@ -306,8 +314,15 @@
 
       <div class="section-header-cad">
         <h3>Equipe Cadastrada</h3>
-        <div class="search-box">
-          <input type="text" id="inputPesquisaFuncionario" onkeyup="filtrarTabelaCadastros()" placeholder="🔍 Pesquisar por nome, matrícula, cargo...">
+        <div style="display: flex; gap: 10px; align-items: center;">
+          <div class="search-box">
+            <select id="filtroCadastroArea" onchange="filtrarTabelaCadastros()" style="padding: 8px 12px; border: 1px solid #0284c7; border-radius: 4px; outline: none; font-size: 0.85rem;">
+              <option value="">Todas as Áreas de Atuação</option>
+            </select>
+          </div>
+          <div class="search-box">
+            <input type="text" id="inputPesquisaFuncionario" onkeyup="filtrarTabelaCadastros()" placeholder="🔍 Pesquisar por nome, matrícula, cargo...">
+          </div>
         </div>
       </div>
 
@@ -321,7 +336,7 @@
               <th>Atuação</th>
               <th>Início Área</th>
               <th>Supervisor</th>
-              <th>Ação</th>
+              <th>Ações</th>
             </tr>
           </thead>
           <tbody id="tabelaFuncionariosCadastrados"></tbody>
@@ -375,9 +390,7 @@
     <div class="modal-content" style="width: 500px;">
       <span class="close-btn" onclick="fecharModalInfoFuncionario()">&times;</span>
       <h3>Ficha do Colaborador</h3>
-      
-      <div id="infoFuncionarioBody" class="info-func-container">
-      </div>
+      <div id="infoFuncionarioBody" class="info-func-container"></div>
     </div>
   </div>
 

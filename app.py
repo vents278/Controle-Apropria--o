@@ -95,10 +95,14 @@ def calcular_regras_horas(data_iso, horas_trabalhadas):
         "dia_semana": dia_semana
     }
 
-def buscar_dados_pendencias(ano, mes, supervisor_filtro, tipo_filtro, busca_func):
-    _, num_dias = calendar.monthrange(ano, mes)
-    inicio_mes = f"{ano}-{mes:02d}-01"
-    fim_mes = f"{ano}-{mes:02d}-{num_dias:02d}"
+def buscar_dados_pendencias(ano, mes, supervisor_filtro, tipo_filtro, busca_func, data_inicio=None, data_fim=None):
+    if data_inicio and data_fim:
+        inicio = data_inicio
+        fim = data_fim
+    else:
+        _, num_dias = calendar.monthrange(ano, mes)
+        inicio = f"{ano}-{mes:02d}-01"
+        fim = f"{ano}-{mes:02d}-{num_dias:02d}"
 
     pendencias = []
 
@@ -112,7 +116,7 @@ def buscar_dados_pendencias(ano, mes, supervisor_filtro, tipo_filtro, busca_func
             LEFT JOIN apropriacoes a ON p.funcionario_id = a.funcionario_id AND p.data = a.data
             WHERE p.data BETWEEN ? AND ?
         '''
-        params = [inicio_mes, fim_mes]
+        params = [inicio, fim]
 
         if supervisor_filtro:
             query += " AND f.supervisor = ?"
@@ -210,7 +214,7 @@ def buscar_funcionarios():
         rows = cursor.fetchall()
     return jsonify([{"id": r[0], "matricula": r[1], "nome": r[2], "cargo": r[3], "atuacao": r[4]} for r in rows])
 
-@app.route('/api/funcionarios', methods=['GET', 'POST', 'PUT'])
+@app.route('/api/funcionarios', methods=['GET', 'POST', 'PUT', 'DELETE'])
 def gerenciar_funcionarios():
     if request.method == 'POST':
         data = request.json
@@ -240,6 +244,20 @@ def gerenciar_funcionarios():
             return jsonify({"mensagem": "Funcionário atualizado!"}), 200
         except sqlite3.IntegrityError:
             return jsonify({"erro": "A matrícula inserida já pertence a outro funcionário."}), 400
+
+    elif request.method == 'DELETE':
+        func_id = request.args.get('id')
+        if not func_id:
+            return jsonify({"erro": "ID do funcionário é obrigatório."}), 400
+
+        with sqlite3.connect(DB_NAME) as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM apropriacoes WHERE funcionario_id = ?", (func_id,))
+            cursor.execute("DELETE FROM presencas WHERE funcionario_id = ?", (func_id,))
+            cursor.execute("DELETE FROM funcionarios WHERE id = ?", (func_id,))
+            conn.commit()
+
+        return jsonify({"mensagem": "Funcionário excluído com sucesso!"}), 200
 
     else:
         with sqlite3.connect(DB_NAME) as conn:
@@ -357,13 +375,15 @@ def obter_pendencias():
     supervisor_filtro = request.args.get('supervisor', '')
     tipo_filtro = request.args.get('tipo', '')
     busca_func = request.args.get('funcionario', '')
+    data_inicio = request.args.get('data_inicio', '')
+    data_fim = request.args.get('data_fim', '')
 
     with sqlite3.connect(DB_NAME) as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT DISTINCT supervisor FROM funcionarios WHERE supervisor IS NOT NULL AND supervisor != '' ORDER BY supervisor")
         supervisores = [r[0] for r in cursor.fetchall()]
 
-    pendencias = buscar_dados_pendencias(ano, mes, supervisor_filtro, tipo_filtro, busca_func)
+    pendencias = buscar_dados_pendencias(ano, mes, supervisor_filtro, tipo_filtro, busca_func, data_inicio, data_fim)
 
     return jsonify({
         "pendencias": pendencias,
@@ -377,8 +397,10 @@ def exportar_pendencias_excel():
     supervisor_filtro = request.args.get('supervisor', '')
     tipo_filtro = request.args.get('tipo', '')
     busca_func = request.args.get('funcionario', '')
+    data_inicio = request.args.get('data_inicio', '')
+    data_fim = request.args.get('data_fim', '')
 
-    pendencias = buscar_dados_pendencias(ano, mes, supervisor_filtro, tipo_filtro, busca_func)
+    pendencias = buscar_dados_pendencias(ano, mes, supervisor_filtro, tipo_filtro, busca_func, data_inicio, data_fim)
 
     dados_excel = []
     for item in pendencias:
@@ -404,7 +426,7 @@ def exportar_pendencias_excel():
         df.to_excel(writer, index=False, sheet_name='Pendencias')
     
     output.seek(0)
-    nome_arquivo = f"Relatorio_Pendencias_{ano}_{mes:02d}.xlsx"
+    nome_arquivo = f"Relatorio_Pendencias_{data_inicio or ano}_{data_fim or mes}.xlsx"
 
     return send_file(
         output,
