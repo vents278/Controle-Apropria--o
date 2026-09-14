@@ -1,10 +1,30 @@
 * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', Arial, sans-serif; }
 body { background-color: #f1f5f9; color: #334155; }
 
+/* Header & Barra do Usuário */
 .header { background: #0f172a; color: #fff; padding: 12px 24px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
 .logo { font-size: 1.15rem; }
 .nav-btn { background: none; border: none; color: #94a3b8; padding: 8px 16px; cursor: pointer; font-size: 0.9rem; font-weight: 600; border-radius: 4px; transition: all 0.2s; }
 .nav-btn.active, .nav-btn:hover { color: #fff; background: #1e293b; border-bottom: 2px solid #38bdf8; }
+
+.user-info { display: flex; align-items: center; gap: 12px; font-size: 0.85rem; }
+.btn-logout { background: #dc2626; color: #fff; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 0.8rem; }
+.btn-logout:hover { background: #b91c1c; }
+
+/* Tela de Login */
+.login-body { display: flex; align-items: center; justify-content: center; min-height: 100vh; background: #0f172a; }
+.login-card { background: #fff; border-radius: 8px; padding: 32px; width: 100%; max-width: 400px; box-shadow: 0 10px 25px rgba(0,0,0,0.3); }
+.login-header { text-align: center; margin-bottom: 24px; }
+.login-header h2 { color: #0f172a; font-size: 1.6rem; margin-bottom: 4px; }
+.login-header p { color: #64748b; font-size: 0.85rem; }
+
+.alert { padding: 10px 14px; border-radius: 4px; font-size: 0.85rem; margin-bottom: 15px; font-weight: bold; }
+.alert.danger { background-color: #fee2e2; color: #991b1b; border: 1px solid #fca5a5; }
+
+/* Módulos & Checkboxes de Permissões */
+.checkbox-group-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 4px; padding: 12px; margin-top: 6px; }
+.checkbox-item { display: flex; align-items: center; gap: 8px; font-size: 0.85rem; font-weight: 500; cursor: pointer; color: #334155; }
+.checkbox-item input { cursor: pointer; width: 16px; height: 16px; }
 
 .main-container { padding: 20px; max-width: 1600px; margin: 0 auto; }
 .page { display: none; }
@@ -137,5 +157,4 @@ input, select, textarea { padding: 8px 10px; border: 1px solid #cbd5e1; border-r
 .btn-excel:hover { background: #15803d; }
 .btn-remove-os { background: #ef4444; color: #fff; border: none; padding: 2px 6px; border-radius: 3px; cursor: pointer; font-size: 0.75rem; }
 .full-width { width: 100%; }
-/* Complemento no final do style.css */
-.section-header-cad { display: flex; justify-content: space-between; align-items: center; margin-top: 20px; }
+.margin-top { margin-top: 15px; }

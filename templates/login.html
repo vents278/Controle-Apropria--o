@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Login - ERP Gestão de Horas e Presença</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="login-body">
+
+  <div class="login-card">
+    <div class="login-header">
+      <h2>ERP Gestão</h2>
+      <p>Controle de Presença e Apropriação de Horas</p>
+    </div>
+
+    <div id="loginAlert" class="alert danger" style="display: none;"></div>
+
+    <form id="formLogin" onsubmit="efetuarLogin(event)">
+      <div class="form-group">
+        <label for="loginEmail">E-mail Corporativo:</label>
+        <input type="email" id="loginEmail" required placeholder="seu.email@empresa.com">
+      </div>
+
+      <div class="form-group">
+        <label for="loginSenha">Senha:</label>
+        <input type="password" id="loginSenha" required placeholder="••••••••">
+      </div>
+
+      <button type="submit" id="btnLogin" class="btn-primary full-width margin-top">Entrar no Sistema</button>
+    </form>
+  </div>
+
+  <script>
+    async function efetuarLogin(e) {
+      e.preventDefault();
+      const alertBox = document.getElementById("loginAlert");
+      const btn = document.getElementById("btnLogin");
+      
+      alertBox.style.display = "none";
+      btn.disabled = true;
+      btn.innerText = "Autenticando...";
+
+      const email = document.getElementById("loginEmail").value;
+      const senha = document.getElementById("loginSenha").value;
+
+      try {
+        const res = await fetch("/api/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, senha })
+        });
+
+        const data = await res.json();
+
+        if (res.ok) {
+          window.location.href = "/";
+        } else {
+          alertBox.innerText = data.erro || "Falha ao realizar login.";
+          alertBox.style.display = "block";
+        }
+      } catch (err) {
+        alertBox.innerText = "Erro de conexão com o servidor.";
+        alertBox.style.display = "block";
+      } finally {
+        btn.disabled = false;
+        btn.innerText = "Entrar no Sistema";
+      }
+    }
+  </script>
+
+</body>
+</html>

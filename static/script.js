@@ -6,31 +6,105 @@ let dadosGradeCache = null;
 let listaTarefasCache = [];
 let funcionariosOSSelecionados = [];
 
-document.addEventListener("DOMContentLoaded", () => {
+let usuarioLogado = null;
+let listaUsuariosCache = [];
+
+const NORM_MODULOS = {
+  "paginaDashboard": "Dashboard Analytics",
+  "paginaOS": "Lançamento de OS",
+  "paginaGrade": "Grade de Presença",
+  "paginaPendencias": "Pendências & Horas Extras",
+  "paginaTarefas": "Quadro de Tarefas",
+  "paginaCadastro": "Cadastros de Funcionários",
+  "paginaUsuarios": "Gestão de Usuários"
+};
+
+document.addEventListener("DOMContentLoaded", async () => {
+  const autenticado = await verificarSessaoUsuario();
+  if (!autenticado) return;
+
   const hoje = new Date();
   const mesAtual = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, '0')}`;
   const dataHojeIso = hoje.toISOString().split('T')[0];
   
-  document.getElementById("filtroMesAno").value = mesAtual;
-  document.getElementById("filtroPendenciasMes").value = mesAtual;
-  document.getElementById("filtroDashboardMes").value = mesAtual;
+  if (document.getElementById("filtroMesAno")) document.getElementById("filtroMesAno").value = mesAtual;
+  if (document.getElementById("filtroPendenciasMes")) document.getElementById("filtroPendenciasMes").value = mesAtual;
+  if (document.getElementById("filtroDashboardMes")) document.getElementById("filtroDashboardMes").value = mesAtual;
   if (document.getElementById("osData")) document.getElementById("osData").value = dataHojeIso;
-  
-  carregarDashboard();
-  carregarListaCadastro();
 });
 
+async function verificarSessaoUsuario() {
+  try {
+    const res = await fetch('/api/me');
+    if (!res.ok) {
+      window.location.href = '/';
+      return false;
+    }
+
+    const data = await res.json();
+    usuarioLogado = data.usuario;
+
+    document.getElementById("labelNomeUsuario").innerText = `👤 ${usuarioLogado.nome} (${usuarioLogado.tipo === 'admin' ? 'Admin' : 'Usuário'})`;
+
+    configurarAcessoModulos();
+    return true;
+  } catch (e) {
+    window.location.href = '/';
+    return false;
+  }
+}
+
+function configurarAcessoModulos() {
+  const eAdmin = usuarioLogado.tipo === 'admin';
+  const modulosPermitidos = usuarioLogado.modulos || [];
+
+  const botoesNav = document.querySelectorAll('.modulo-nav');
+  let primeiraAbaDisponivel = null;
+
+  botoesNav.forEach(btn => {
+    const moduloId = btn.id.replace('nav-', '');
+
+    if (eAdmin || modulosPermitidos.includes(moduloId)) {
+      btn.style.display = 'inline-block';
+      if (!primeiraAbaDisponivel) primeiraAbaDisponivel = moduloId;
+    } else {
+      btn.style.display = 'none';
+    }
+  });
+
+  if (primeiraAbaDisponivel) {
+    mostrarPagina(primeiraAbaDisponivel);
+  } else {
+    alert("Seu usuário não possui acesso a nenhum módulo. Entre em contato com o administrador.");
+  }
+}
+
+async function efetuarLogout() {
+  await fetch('/api/logout', { method: 'POST' });
+  window.location.href = '/';
+}
+
 function mostrarPagina(paginaId, evt) {
+  if (usuarioLogado.tipo !== 'admin' && !usuarioLogado.modulos.includes(paginaId)) {
+    alert("Você não possui permissão para acessar este módulo.");
+    return;
+  }
+
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
-  document.getElementById(paginaId).classList.add('active');
-  if (evt) evt.target.classList.add('active');
+
+  const elPagina = document.getElementById(paginaId);
+  if (elPagina) elPagina.classList.add('active');
+
+  const btnNav = document.getElementById(`nav-${paginaId}`);
+  if (btnNav) btnNav.classList.add('active');
 
   if (paginaId === 'paginaDashboard') carregarDashboard();
   if (paginaId === 'paginaGrade') carregarGrade();
   if (paginaId === 'paginaCadastro') carregarListaCadastro();
   if (paginaId === 'paginaPendencias') carregarPendencias();
   if (paginaId === 'paginaTarefas') carregarTarefas();
+  if (paginaId === 'paginaUsuarios') carregarListaUsuarios();
 }
 
 // 0. DASHBOARD
@@ -125,42 +199,45 @@ function renderizarTagsFuncionariosOS() {
   });
 }
 
-document.getElementById("formLancamentoOS").addEventListener("submit", async (e) => {
-  e.preventDefault();
+const formOS = document.getElementById("formLancamentoOS");
+if (formOS) {
+  formOS.addEventListener("submit", async (e) => {
+    e.preventDefault();
 
-  if (funcionariosOSSelecionados.length === 0) {
-    alert("Adicione pelo menos um funcionário antes de lançar a OS.");
-    return;
-  }
+    if (funcionariosOSSelecionados.length === 0) {
+      alert("Adicione pelo menos um funcionário antes de lançar a OS.");
+      return;
+    }
 
-  const dados = {
-    ordem_servico: document.getElementById("osNumero").value,
-    descricao: document.getElementById("osDescricao").value,
-    data: document.getElementById("osData").value,
-    horas: parseFloat(document.getElementById("osHoras").value),
-    funcionarios_ids: funcionariosOSSelecionados.map(f => f.id)
-  };
+    const dados = {
+      ordem_servico: document.getElementById("osNumero").value,
+      descricao: document.getElementById("osDescricao").value,
+      data: document.getElementById("osData").value,
+      horas: parseFloat(document.getElementById("osHoras").value),
+      funcionarios_ids: funcionariosOSSelecionados.map(f => f.id)
+    };
 
-  const res = await fetch("/api/os/lancamento", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(dados)
+    const res = await fetch("/api/os/lancamento", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(dados)
+    });
+
+    const resultado = await res.json();
+
+    if (res.ok) {
+      alert(resultado.mensagem);
+      document.getElementById("osNumero").value = "";
+      document.getElementById("osDescricao").value = "";
+      document.getElementById("osHoras").value = "";
+      funcionariosOSSelecionados = [];
+      renderizarTagsFuncionariosOS();
+      carregarGrade();
+    } else {
+      alert(resultado.erro || "Erro ao efetuar lançamento.");
+    }
   });
-
-  const resultado = await res.json();
-
-  if (res.ok) {
-    alert(resultado.mensagem);
-    document.getElementById("osNumero").value = "";
-    document.getElementById("osDescricao").value = "";
-    document.getElementById("osHoras").value = "";
-    funcionariosOSSelecionados = [];
-    renderizarTagsFuncionariosOS();
-    carregarGrade();
-  } else {
-    alert(resultado.erro || "Erro ao efetuar lançamento.");
-  }
-});
+}
 
 document.addEventListener("click", (e) => {
   const wrapper = document.querySelector(".autocomplete-wrapper");
@@ -541,29 +618,32 @@ function renderizarListaOS() {
   });
 }
 
-document.getElementById("formModal").addEventListener("submit", async (e) => {
-  e.preventDefault();
+const formModal = document.getElementById("formModal");
+if (formModal) {
+  formModal.addEventListener("submit", async (e) => {
+    e.preventDefault();
 
-  const dados = {
-    data: dataSelecionada,
-    funcionario_id: funcionarioSelecionadoId,
-    situacao: document.getElementById("modalSituacao").value,
-    observacao: document.getElementById("modalObs").value,
-    apropriacoes: listaOSAtual
-  };
+    const dados = {
+      data: dataSelecionada,
+      funcionario_id: funcionarioSelecionadoId,
+      situacao: document.getElementById("modalSituacao").value,
+      observacao: document.getElementById("modalObs").value,
+      apropriacoes: listaOSAtual
+    };
 
-  const res = await fetch("/api/lancamento", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(dados)
+    const res = await fetch("/api/lancamento", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(dados)
+    });
+
+    if (res.ok) {
+      fecharModal();
+      carregarGrade();
+      carregarDashboard();
+    }
   });
-
-  if (res.ok) {
-    fecharModal();
-    carregarGrade();
-    carregarDashboard();
-  }
-});
+}
 
 // 5. FICHA DO FUNCIONÁRIO
 async function abrirModalInfoFuncionario(id) {
@@ -741,35 +821,175 @@ function limparFormularioCadastro() {
   document.getElementById("btnCancelarEdit").style.display = "none";
 }
 
-document.getElementById("formCadastro").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  
-  const id = document.getElementById("cadId").value;
-  const dados = {
-    id: id ? parseInt(id) : null,
-    matricula: document.getElementById("cadMatricula").value,
-    nome: document.getElementById("cadNome").value,
-    cargo: document.getElementById("cadCargo").value,
-    atuacao: document.getElementById("cadAtuacao").value,
-    inicio_atividades: document.getElementById("cadInicioAtividades").value,
-    supervisor: document.getElementById("cadSupervisor").value
-  };
+const formCad = document.getElementById("formCadastro");
+if (formCad) {
+  formCad.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    
+    const id = document.getElementById("cadId").value;
+    const dados = {
+      id: id ? parseInt(id) : null,
+      matricula: document.getElementById("cadMatricula").value,
+      nome: document.getElementById("cadNome").value,
+      cargo: document.getElementById("cadCargo").value,
+      atuacao: document.getElementById("cadAtuacao").value,
+      inicio_atividades: document.getElementById("cadInicioAtividades").value,
+      supervisor: document.getElementById("cadSupervisor").value
+    };
 
-  const metodo = id ? 'PUT' : 'POST';
-  const res = await fetch("/api/funcionarios", {
-    method: metodo,
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(dados)
+    const metodo = id ? 'PUT' : 'POST';
+    const res = await fetch("/api/funcionarios", {
+      method: metodo,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(dados)
+    });
+
+    const resultado = await res.json();
+
+    if (res.ok) {
+      alert(id ? "Funcionário atualizado!" : "Funcionário cadastrado!");
+      limparFormularioCadastro();
+      carregarListaCadastro();
+      carregarGrade();
+    } else {
+      alert(resultado.erro || "Erro ao salvar.");
+    }
+  });
+}
+
+// 7. GESTÃO DE USUÁRIOS E PERMISSÕES DE MÓDULOS (ADMIN ONLY)
+
+async function carregarListaUsuarios() {
+  const res = await fetch('/api/usuarios');
+  if (!res.ok) return;
+
+  listaUsuariosCache = await res.json();
+  renderizarTabelaUsuarios(listaUsuariosCache);
+}
+
+function renderizarTabelaUsuarios(lista) {
+  const tbody = document.getElementById('tabelaUsuariosCadastrados');
+  tbody.innerHTML = "";
+
+  if (lista.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="5" style="padding: 12px; color: #64748b;">Nenhum usuário cadastrado.</td></tr>`;
+    return;
+  }
+
+  lista.forEach(u => {
+    const modulosNomes = u.tipo === 'admin' 
+      ? '<span class="badge-info">Acesso Total (Admin)</span>' 
+      : (u.modulos || []).map(m => NORM_MODULOS[m] || m).join(', ') || 'Nenhum módulo';
+
+    tbody.innerHTML += `
+      <tr>
+        <td><b>${u.nome}</b></td>
+        <td>${u.email}</td>
+        <td><span class="${u.tipo === 'admin' ? 'badge-extra' : 'badge-info'}">${u.tipo.toUpperCase()}</span></td>
+        <td style="text-align: left;">${modulosNomes}</td>
+        <td>
+          <button class="btn-secondary" onclick="prepararEdicaoUsuario(${u.id})">Editar</button>
+          <button class="btn-danger" onclick="excluirUsuario(${u.id}, '${u.nome}')">Excluir</button>
+        </td>
+      </tr>
+    `;
+  });
+}
+
+function alternarVisibilidadeModulos() {
+  const tipo = document.getElementById("usrTipo").value;
+  const container = document.getElementById("containerModulosAcesso");
+  container.style.display = tipo === 'admin' ? 'none' : 'block';
+}
+
+function prepararEdicaoUsuario(id) {
+  const usr = listaUsuariosCache.find(u => u.id === id);
+  if (!usr) return;
+
+  document.getElementById("usrId").value = usr.id;
+  document.getElementById("usrNome").value = usr.nome;
+  document.getElementById("usrEmail").value = usr.email;
+  document.getElementById("usrSenha").value = "";
+  document.getElementById("usrTipo").value = usr.tipo;
+
+  alternarVisibilidadeModulos();
+
+  const checkboxes = document.querySelectorAll('input[name="chkModulo"]');
+  checkboxes.forEach(chk => {
+    chk.checked = (usr.modulos || []).includes(chk.value);
   });
 
-  const resultado = await res.json();
+  document.getElementById("tituloFormUsuario").innerText = "Editar Usuário e Permissões";
+  document.getElementById("btnSalvarUsr").innerText = "Atualizar Usuário";
+  document.getElementById("btnCancelarUsr").style.display = "inline-block";
+
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function limparFormularioUsuario() {
+  document.getElementById("usrId").value = "";
+  document.getElementById("formCadastroUsuario").reset();
+  document.getElementById("tituloFormUsuario").innerText = "Cadastrar Novo Usuário";
+  document.getElementById("btnSalvarUsr").innerText = "Salvar Usuário";
+  document.getElementById("btnCancelarUsr").style.display = "none";
+  alternarVisibilidadeModulos();
+}
+
+async function excluirUsuario(id, nome) {
+  if (!confirm(`Deseja realmente remover o acesso do usuário "${nome}"?`)) return;
+
+  const res = await fetch(`/api/usuarios?id=${id}`, { method: 'DELETE' });
+  const data = await res.json();
 
   if (res.ok) {
-    alert(id ? "Funcionário atualizado!" : "Funcionário cadastrado!");
-    limparFormularioCadastro();
-    carregarListaCadastro();
-    carregarGrade();
+    alert(data.mensagem);
+    carregarListaUsuarios();
   } else {
-    alert(resultado.erro || "Erro ao salvar.");
+    alert(data.erro || "Erro ao excluir usuário.");
   }
-});
+}
+
+const formUsr = document.getElementById("formCadastroUsuario");
+if (formUsr) {
+  formUsr.addEventListener("submit", async (e) => {
+    e.preventDefault();
+
+    const id = document.getElementById("usrId").value;
+    const tipo = document.getElementById("usrTipo").value;
+
+    const modulosSelecionados = [];
+    if (tipo === 'comum') {
+      document.querySelectorAll('input[name="chkModulo"]:checked').forEach(chk => {
+        modulosSelecionados.push(chk.value);
+      });
+    } else {
+      modulosSelecionados.push("paginaDashboard", "paginaOS", "paginaGrade", "paginaPendencias", "paginaTarefas", "paginaCadastro", "paginaUsuarios");
+    }
+
+    const dados = {
+      id: id ? parseInt(id) : null,
+      nome: document.getElementById("usrNome").value,
+      email: document.getElementById("usrEmail").value,
+      senha: document.getElementById("usrSenha").value,
+      tipo: tipo,
+      modulos: modulosSelecionados
+    };
+
+    const metodo = id ? 'PUT' : 'POST';
+    const res = await fetch("/api/usuarios", {
+      method: metodo,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(dados)
+    });
+
+    const resultado = await res.json();
+
+    if (res.ok) {
+      alert(id ? "Usuário atualizado com sucesso!" : "Usuário cadastrado com sucesso!");
+      limparFormularioUsuario();
+      carregarListaUsuarios();
+    } else {
+      alert(resultado.erro || "Erro ao salvar usuário.");
+    }
+  });
+}
