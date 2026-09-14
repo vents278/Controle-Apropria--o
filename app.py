@@ -2,13 +2,16 @@ import os
 import calendar
 import io
 from datetime import datetime, date
-from flask import Flask, render_template, request, jsonify, send_file
+from flask import Flask, render_template, request, jsonify, send_file, redirect, url_for
+from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
+from werkzeug.security import generate_password_hash, check_password_hash
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
 load_dotenv()
 
 app = Flask(__name__)
+app.secret_key = os.getenv("SECRET_KEY", "chave_secreta_super_segura_erp")
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
@@ -17,6 +20,29 @@ if not SUPABASE_URL or not SUPABASE_KEY:
     raise RuntimeError("As variáveis SUPABASE_URL e SUPABASE_KEY devem estar configuradas no arquivo .env")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# Configuração do Flask-Login
+login_manager = LoginManager()
+login_manager.init_app(app)
+login_manager.login_view = 'login'
+
+class User(UserMixin):
+    def __init__(self, id, username, nome, role):
+        self.id = str(id)
+        self.username = username
+        self.nome = nome
+        self.role = role
+
+@login_manager.user_loader
+def load_user(user_id):
+    try:
+        res = supabase.table('usuarios').select('id, username, nome, role').eq('id', user_id).execute()
+        if res.data:
+            u = res.data[0]
+            return User(id=u['id'], username=u['username'], nome=u['nome'], role=u['role'])
+    except Exception:
+        pass
+    return None
 
 FERIADOS = [
     "2026-01-01", "2026-04-21", "2026-05-01", "2026-09-07",
@@ -152,6 +178,99 @@ def buscar_dados_pendencias(ano, mes, supervisor_filtro, tipo_filtro, busca_func
 
     return pendencias
 
+# --- AUTENTICAÇÃO E SESSÃO ---
+
+@app.route('/login', methods=['POST'])
+def login():
+    data = request.json
+    username = data.get('username', '').strip()
+    password = data.get('password', '').strip()
+
+    if not username or not password:
+        return jsonify({"erro": "Informe o usuário e a senha."}), 400
+
+    res = supabase.table('usuarios').select('*').eq('username', username).execute()
+    if not res.data:
+        return jsonify({"erro": "Usuário ou senha inválidos."}), 401
+
+    u = res.data[0]
+    if check_password_hash(u['password_hash'], password):
+        user_obj = User(id=u['id'], username=u['username'], nome=u['nome'], role=u['role'])
+        login_user(user_obj)
+        return jsonify({
+            "mensagem": "Login realizado com sucesso!",
+            "usuario": {"nome": u['nome'], "role": u['role'], "username": u['username']}
+        }), 200
+
+    return jsonify({"erro": "Usuário ou senha inválidos."}), 401
+
+@app.route('/logout', methods=['POST'])
+@login_required
+def logout():
+    logout_user()
+    return jsonify({"mensagem": "Logout realizado com sucesso!"}), 200
+
+@app.route('/api/usuario_atual', methods=['GET'])
+def usuario_atual():
+    if current_user.is_authenticated:
+        return jsonify({
+            "autenticado": True,
+            "nome": current_user.nome,
+            "role": current_user.role,
+            "username": current_user.username
+        })
+    return jsonify({"autenticado": False})
+
+@app.route('/api/usuarios', methods=['POST', 'GET', 'DELETE'])
+@login_required
+def gerenciar_usuarios():
+    # Somente administradores podem criar ou excluir usuários
+    if current_user.role != 'admin':
+        return jsonify({"erro": "Acesso negado. Apenas administradores podem gerenciar usuários."}), 403
+
+    if request.method == 'POST':
+        data = request.json
+        username = data.get('username', '').strip()
+        password = data.get('password', '').strip()
+        nome = data.get('nome', '').strip()
+        role = data.get('role', 'comum')
+
+        if not username or not password or not nome:
+            return jsonify({"erro": "Preencha todos os campos obrigatórios."}), 400
+
+        res_check = supabase.table('usuarios').select('id').eq('username', username).execute()
+        if res_check.data:
+            return jsonify({"erro": "Nome de usuário já cadastrado."}), 400
+
+        pwd_hash = generate_password_hash(password)
+        payload = {
+            "username": username,
+            "password_hash": pwd_hash,
+            "nome": nome,
+            "role": role if role in ['admin', 'comum'] else 'comum'
+        }
+
+        try:
+            supabase.table('usuarios').insert(payload).execute()
+            return jsonify({"mensagem": "Usuário cadastrado com sucesso!"}), 201
+        except Exception:
+            return jsonify({"erro": "Erro ao cadastrar usuário."}), 400
+
+    elif request.method == 'DELETE':
+        user_id = request.args.get('id')
+        if not user_id:
+            return jsonify({"erro": "ID do usuário é obrigatório."}), 400
+
+        if str(user_id) == str(current_user.id):
+            return jsonify({"erro": "Você não pode excluir sua própria conta enquanto logado."}), 400
+
+        supabase.table('usuarios').delete().eq('id', user_id).execute()
+        return jsonify({"mensagem": "Usuário excluído com sucesso!"}), 200
+
+    else:
+        res = supabase.table('usuarios').select('id, username, nome, role, created_at').order('nome').execute()
+        return jsonify(res.data)
+
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -159,6 +278,7 @@ def index():
 # --- GERENCIAMENTO DE FUNCIONÁRIOS ---
 
 @app.route('/api/funcionarios/buscar', methods=['GET'])
+@login_required
 def buscar_funcionarios():
     q = request.args.get('q', '').strip()
     query = supabase.table('funcionarios').select('id, matricula, nome, cargo, atuacao')
@@ -169,7 +289,11 @@ def buscar_funcionarios():
     return jsonify(res.data)
 
 @app.route('/api/funcionarios', methods=['GET', 'POST', 'PUT', 'DELETE'])
+@login_required
 def gerenciar_funcionarios():
+    if request.method in ['POST', 'PUT', 'DELETE'] and current_user.role != 'admin':
+        return jsonify({"erro": "Apenas administradores podem modificar dados de funcionários."}), 403
+
     if request.method == 'POST':
         data = request.json
         payload = {
@@ -216,6 +340,7 @@ def gerenciar_funcionarios():
         return jsonify(res.data)
 
 @app.route('/api/funcionarios/<int:func_id>/detalhes', methods=['GET'])
+@login_required
 def obter_detalhes_funcionario(func_id):
     res_func = supabase.table('funcionarios').select('*').eq('id', func_id).execute()
     if not res_func.data:
@@ -243,6 +368,7 @@ def obter_detalhes_funcionario(func_id):
 # --- LANÇAMENTO POR OS ---
 
 @app.route('/api/os/lancamento', methods=['POST'])
+@login_required
 def salvar_lancamento_os():
     data_req = request.json
     ordem_servico = data_req.get('ordem_servico', '').strip()
@@ -288,6 +414,7 @@ def salvar_lancamento_os():
 # --- GRADE MATRICIAL ---
 
 @app.route('/api/grade', methods=['GET'])
+@login_required
 def obter_grade():
     ano = int(request.args.get('ano', date.today().year))
     mes = int(request.args.get('mes', date.today().month))
@@ -347,6 +474,7 @@ def obter_grade():
 # --- PENDÊNCIAS E EXPORTAÇÃO EXCEL ---
 
 @app.route('/api/pendencias', methods=['GET'])
+@login_required
 def obter_pendencias():
     ano = int(request.args.get('ano', date.today().year))
     mes = int(request.args.get('mes', date.today().month))
@@ -367,6 +495,7 @@ def obter_pendencias():
     })
 
 @app.route('/api/pendencias/exportar_excel', methods=['GET'])
+@login_required
 def exportar_pendencias_excel():
     import pandas as pd
     
@@ -412,6 +541,7 @@ def exportar_pendencias_excel():
     )
 
 @app.route('/api/pendencias/sanar', methods=['POST'])
+@login_required
 def sanar_pendencia():
     data_req = request.json
     f_id = data_req.get('funcionario_id')
@@ -423,6 +553,7 @@ def sanar_pendencia():
 # --- DASHBOARD ---
 
 @app.route('/api/dashboard', methods=['GET'])
+@login_required
 def obter_dashboard():
     ano = int(request.args.get('ano', date.today().year))
     mes = int(request.args.get('mes', date.today().month))
@@ -502,6 +633,7 @@ def obter_dashboard():
 # --- QUADRO DE TAREFAS ---
 
 @app.route('/api/tarefas', methods=['GET', 'POST', 'PUT', 'DELETE'])
+@login_required
 def gerenciar_tarefas():
     if request.method == 'GET':
         res = supabase.table('tarefas').select('*').execute()
@@ -532,6 +664,7 @@ def gerenciar_tarefas():
 # --- DETALHES E SALVAMENTO ---
 
 @app.route('/api/lancamento/detalhes', methods=['GET'])
+@login_required
 def obter_detalhes_lancamento():
     f_id = request.args.get('funcionario_id')
     data_reg = request.args.get('data')
@@ -550,6 +683,7 @@ def obter_detalhes_lancamento():
     })
 
 @app.route('/api/lancamento', methods=['POST'])
+@login_required
 def salvar_lancamento():
     data_req = request.json
     data_reg = data_req.get('data')

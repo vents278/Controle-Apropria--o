@@ -5,20 +5,90 @@ let listaFuncionariosCache = [];
 let dadosGradeCache = null;
 let listaTarefasCache = [];
 let funcionariosOSSelecionados = [];
+let usuarioLogado = null;
 
-document.addEventListener("DOMContentLoaded", () => {
+document.addEventListener("DOMContentLoaded", async () => {
   const hoje = new Date();
   const mesAtual = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, '0')}`;
   const dataHojeIso = hoje.toISOString().split('T')[0];
   
-  document.getElementById("filtroMesAno").value = mesAtual;
-  document.getElementById("filtroPendenciasMes").value = mesAtual;
-  document.getElementById("filtroDashboardMes").value = mesAtual;
+  if (document.getElementById("filtroMesAno")) document.getElementById("filtroMesAno").value = mesAtual;
+  if (document.getElementById("filtroPendenciasMes")) document.getElementById("filtroPendenciasMes").value = mesAtual;
+  if (document.getElementById("filtroDashboardMes")) document.getElementById("filtroDashboardMes").value = mesAtual;
   if (document.getElementById("osData")) document.getElementById("osData").value = dataHojeIso;
-  
-  carregarDashboard();
-  carregarListaCadastro();
+
+  await verificarSessao();
 });
+
+// AUTENTICAÇÃO
+async function verificarSessao() {
+  const res = await fetch('/api/usuario_atual');
+  const data = await res.json();
+
+  if (data.autenticado) {
+    usuarioLogado = data;
+    exibirSistema();
+  } else {
+    exibirLogin();
+  }
+}
+
+function exibirLogin() {
+  document.getElementById("loginScreen").style.display = "flex";
+  document.getElementById("appContainer").style.display = "none";
+}
+
+function exibirSistema() {
+  document.getElementById("loginScreen").style.display = "none";
+  document.getElementById("appContainer").style.display = "block";
+
+  document.getElementById("userHeaderNome").innerText = usuarioLogado.nome;
+  const badge = document.getElementById("userHeaderBadge");
+  badge.innerText = usuarioLogado.role === 'admin' ? 'Administrador' : 'Usuário Comum';
+  badge.className = `user-role-badge ${usuarioLogado.role === 'admin' ? 'badge-admin' : 'badge-comum'}`;
+
+  // Controle de exibição para Administradores
+  const elementosAdmin = document.querySelectorAll('.admin-only');
+  elementosAdmin.forEach(el => {
+    el.style.display = usuarioLogado.role === 'admin' ? '' : 'none';
+  });
+
+  carregarDashboard();
+}
+
+document.getElementById("formLogin").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const errDiv = document.getElementById("loginError");
+  errDiv.style.display = "none";
+
+  const payload = {
+    username: document.getElementById("loginUsername").value,
+    password: document.getElementById("loginPassword").value
+  };
+
+  const res = await fetch("/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+
+  const data = await res.json();
+
+  if (res.ok) {
+    usuarioLogado = data.usuario;
+    document.getElementById("formLogin").reset();
+    exibirSistema();
+  } else {
+    errDiv.innerText = data.erro || "Erro ao efetuar login.";
+    errDiv.style.display = "block";
+  }
+});
+
+async function fazerLogout() {
+  await fetch("/logout", { method: "POST" });
+  usuarioLogado = null;
+  exibirLogin();
+}
 
 function mostrarPagina(paginaId, evt) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
@@ -31,6 +101,79 @@ function mostrarPagina(paginaId, evt) {
   if (paginaId === 'paginaCadastro') carregarListaCadastro();
   if (paginaId === 'paginaPendencias') carregarPendencias();
   if (paginaId === 'paginaTarefas') carregarTarefas();
+  if (paginaId === 'paginaUsuarios') carregarUsuarios();
+}
+
+// GESTÃO DE USUÁRIOS (APENAS ADMIN)
+async function carregarUsuarios() {
+  if (!usuarioLogado || usuarioLogado.role !== 'admin') return;
+
+  const res = await fetch('/api/usuarios');
+  const lista = await res.json();
+
+  const tbody = document.getElementById('tabelaUsuariosCadastrados');
+  tbody.innerHTML = "";
+
+  if (lista.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="5" style="padding:10px; color:#64748b;">Nenhum usuário cadastrado.</td></tr>`;
+    return;
+  }
+
+  lista.forEach(u => {
+    const dataCriacao = u.created_at ? new Date(u.created_at).toLocaleDateString('pt-BR') : '-';
+    tbody.innerHTML += `
+      <tr>
+        <td><b>${u.nome}</b></td>
+        <td>${u.username}</td>
+        <td><span class="user-role-badge ${u.role === 'admin' ? 'badge-admin' : 'badge-comum'}">${u.role === 'admin' ? 'Administrador' : 'Usuário Comum'}</span></td>
+        <td>${dataCriacao}</td>
+        <td>
+          <button class="btn-danger" onclick="excluirUsuario(${u.id}, '${u.nome}')">Excluir</button>
+        </td>
+      </tr>
+    `;
+  });
+}
+
+document.getElementById("formCadastroUsuario").addEventListener("submit", async (e) => {
+  e.preventDefault();
+
+  const payload = {
+    nome: document.getElementById("usrNome").value,
+    username: document.getElementById("usrUsername").value,
+    password: document.getElementById("usrPassword").value,
+    role: document.getElementById("usrRole").value
+  };
+
+  const res = await fetch("/api/usuarios", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+
+  const data = await res.json();
+
+  if (res.ok) {
+    alert(data.mensagem);
+    document.getElementById("formCadastroUsuario").reset();
+    carregarUsuarios();
+  } else {
+    alert(data.erro || "Erro ao cadastrar usuário.");
+  }
+});
+
+async function excluirUsuario(id, nome) {
+  if (!confirm(`Tem certeza que deseja excluir o usuário "${nome}"?`)) return;
+
+  const res = await fetch(`/api/usuarios?id=${id}`, { method: 'DELETE' });
+  const data = await res.json();
+
+  if (res.ok) {
+    alert(data.mensagem);
+    carregarUsuarios();
+  } else {
+    alert(data.erro || "Erro ao excluir usuário.");
+  }
 }
 
 // 0. DASHBOARD
@@ -661,8 +804,20 @@ function renderizarTabelaCadastros(lista) {
     return;
   }
 
+  const isAdmin = usuarioLogado && usuarioLogado.role === 'admin';
+
   lista.forEach(f => {
     const dataInicioBr = f.inicio_atividades ? f.inicio_atividades.split('-').reverse().join('/') : '-';
+    let acoesHtml = '';
+    if (isAdmin) {
+      acoesHtml = `
+        <td class="admin-only">
+          <button class="btn-secondary" onclick="prepararEdicao(${f.id})">Editar</button>
+          <button class="btn-danger" onclick="excluirFuncionario(${f.id}, '${f.nome}')">Excluir</button>
+        </td>
+      `;
+    }
+
     tbody.innerHTML += `
       <tr>
         <td>${f.matricula || '-'}</td>
@@ -671,10 +826,7 @@ function renderizarTabelaCadastros(lista) {
         <td>${f.atuacao}</td>
         <td>${dataInicioBr}</td>
         <td>${f.supervisor || '-'}</td>
-        <td>
-          <button class="btn-secondary" onclick="prepararEdicao(${f.id})">Editar</button>
-          <button class="btn-danger" onclick="excluirFuncionario(${f.id}, '${f.nome}')">Excluir</button>
-        </td>
+        ${acoesHtml}
       </tr>
     `;
   });
