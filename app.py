@@ -1,53 +1,67 @@
-import os
+from flask import Flask, render_template, request, jsonify, send_file
+import sqlite3
+from datetime import date, datetime
 import calendar
+import pandas as pd
 import io
-from datetime import datetime, date
-from flask import Flask, render_template, request, jsonify, send_file, redirect, url_for
-from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
-from werkzeug.security import generate_password_hash, check_password_hash
-from dotenv import load_dotenv
-from supabase import create_client, Client
-
-load_dotenv()
 
 app = Flask(__name__)
-app.secret_key = os.getenv("SECRET_KEY", "chave_secreta_super_segura_erp")
-
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-
-if not SUPABASE_URL or not SUPABASE_KEY:
-    raise RuntimeError("As variáveis SUPABASE_URL e SUPABASE_KEY devem estar configuradas no arquivo .env")
-
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-# Configuração do Flask-Login
-login_manager = LoginManager()
-login_manager.init_app(app)
-login_manager.login_view = 'login'
-
-class User(UserMixin):
-    def __init__(self, id, username, nome, role):
-        self.id = str(id)
-        self.username = username
-        self.nome = nome
-        self.role = role
-
-@login_manager.user_loader
-def load_user(user_id):
-    try:
-        res = supabase.table('usuarios').select('id, username, nome, role').eq('id', user_id).execute()
-        if res.data:
-            u = res.data[0]
-            return User(id=u['id'], username=u['username'], nome=u['nome'], role=u['role'])
-    except Exception:
-        pass
-    return None
+DB_NAME = "database.db"
 
 FERIADOS = [
     "2026-01-01", "2026-04-21", "2026-05-01", "2026-09-07",
     "2026-10-12", "2026-11-02", "2026-11-15", "2026-11-20", "2026-12-25"
 ]
+
+def init_db():
+    with sqlite3.connect(DB_NAME) as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS funcionarios (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                matricula TEXT UNIQUE,
+                nome TEXT NOT NULL,
+                cargo TEXT NOT NULL,
+                atuacao TEXT DEFAULT 'GERAL',
+                supervisor TEXT
+            )
+        ''')
+
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS presencas (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                data TEXT NOT NULL,
+                funcionario_id INTEGER NOT NULL,
+                situacao TEXT NOT NULL,
+                observacao TEXT,
+                status_pendencia TEXT DEFAULT 'PENDENTE',
+                FOREIGN KEY (funcionario_id) REFERENCES funcionarios(id),
+                UNIQUE(data, funcionario_id)
+            )
+        ''')
+
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS apropriacoes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                data TEXT NOT NULL,
+                funcionario_id INTEGER NOT NULL,
+                ordem_servico TEXT NOT NULL,
+                horas REAL NOT NULL,
+                FOREIGN KEY (funcionario_id) REFERENCES funcionarios(id)
+            )
+        ''')
+
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS tarefas (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                titulo TEXT NOT NULL,
+                descricao TEXT,
+                responsavel TEXT,
+                prioridade TEXT DEFAULT 'Média',
+                status TEXT DEFAULT 'A Fazer'
+            )
+        ''')
+        conn.commit()
 
 def calcular_regras_horas(data_iso, horas_trabalhadas):
     dt = datetime.strptime(data_iso, "%Y-%m-%d")
@@ -90,285 +104,171 @@ def buscar_dados_pendencias(ano, mes, supervisor_filtro, tipo_filtro, busca_func
         inicio = f"{ano}-{mes:02d}-01"
         fim = f"{ano}-{mes:02d}-{num_dias:02d}"
 
-    query = supabase.table("presencas").select("data, situacao, status_pendencia, funcionarios!inner(id, nome, matricula, supervisor)").gte("data", inicio).lte("data", fim)
-    
-    if supervisor_filtro:
-        query = query.eq("funcionarios.supervisor", supervisor_filtro)
-
-    res_presencas = query.execute().data
-    res_apropriacoes = supabase.table("apropriacoes").select("funcionario_id, data, horas").gte("data", inicio).lte("data", fim).execute().data
-
-    horas_map = {}
-    for ap in res_apropriacoes:
-        chave = f"{ap['funcionario_id']}_{ap['data']}"
-        horas_map[chave] = horas_map.get(chave, 0.0) + float(ap["horas"])
-
     pendencias = []
 
-    for p in res_presencas:
-        f = p["funcionarios"]
-        f_id = f["id"]
-        d_data = p["data"]
-        nome = f["nome"]
-        matricula = f.get("matricula")
-        supervisor = f.get("supervisor")
-        situacao = p["situacao"]
-        st_pend = p.get("status_pendencia") or "PENDENTE"
-        
-        if st_pend == "SANADA":
-            continue
+    with sqlite3.connect(DB_NAME) as conn:
+        cursor = conn.cursor()
 
-        if busca_func:
-            termo = busca_func.lower()
-            if termo not in nome.lower() and (not matricula or termo not in matricula.lower()):
+        query = '''
+            SELECT p.data, f.id, f.nome, f.matricula, f.supervisor, p.situacao, p.status_pendencia, COALESCE(SUM(a.horas), 0) as total_horas
+            FROM presencas p
+            JOIN funcionarios f ON p.funcionario_id = f.id
+            LEFT JOIN apropriacoes a ON p.funcionario_id = a.funcionario_id AND p.data = a.data
+            WHERE p.data BETWEEN ? AND ?
+        '''
+        params = [inicio, fim]
+
+        if supervisor_filtro:
+            query += " AND f.supervisor = ?"
+            params.append(supervisor_filtro)
+
+        query += " GROUP BY p.data, p.funcionario_id"
+        cursor.execute(query, params)
+
+        for row in cursor.fetchall():
+            d_data, f_id, nome, matricula, supervisor, situacao, st_pend, horas = row
+            status_atual = st_pend or "PENDENTE"
+
+            if status_atual == "SANADA":
                 continue
 
-        horas = horas_map.get(f"{f_id}_{d_data}", 0.0)
-        item_pendencia = None
+            if busca_func:
+                termo = busca_func.lower()
+                if termo not in nome.lower() and (not matricula or termo not in matricula.lower()):
+                    continue
 
-        if situacao == 'Deslocado' and horas == 0:
-            item_pendencia = {
-                "data": d_data, "funcionario_id": f_id, "funcionario": nome,
-                "matricula": matricula or "-", "supervisor": supervisor or "Não informado",
-                "horas_trabalhadas": horas, "carga_padrao": 0, "adicional_tipo": "DESLOCADO",
-                "horas_extras": 0, "status_pendencia": st_pend,
-                "mensagem": "Funcionário Deslocado sem lançamento de Ordens de Serviço (OS)."
-            }
-        elif situacao in ['Presente', 'Deslocado']:
-            calc = calcular_regras_horas(d_data, horas)
-            carga = calc["carga_padrao"]
-            
-            if calc["horas_100"] > 0:
-                motivo = "Trabalho em Domingo" if calc["dia_semana"] == 6 else "Trabalho em Feriado"
-                item_pendencia = {
-                    "data": d_data, "funcionario_id": f_id, "funcionario": nome,
-                    "matricula": matricula or "-", "supervisor": supervisor or "Não informado",
-                    "horas_trabalhadas": horas, "carga_padrao": 0, "adicional_tipo": "100%",
-                    "horas_extras": calc["horas_100"], "status_pendencia": st_pend,
-                    "mensagem": f"{motivo}: {calc['horas_100']:.1f}h extras (100%)."
-                }
-            elif calc["horas_70"] > 0:
-                item_pendencia = {
-                    "data": d_data, "funcionario_id": f_id, "funcionario": nome,
-                    "matricula": matricula or "-", "supervisor": supervisor or "Não informado",
-                    "horas_trabalhadas": horas, "carga_padrao": 0, "adicional_tipo": "70%",
-                    "horas_extras": calc["horas_70"], "status_pendencia": st_pend,
-                    "mensagem": f"Trabalho em Sábado: {calc['horas_70']:.1f}h extras (70%)."
-                }
-            elif calc["horas_50"] > 0:
-                item_pendencia = {
-                    "data": d_data, "funcionario_id": f_id, "funcionario": nome,
-                    "matricula": matricula or "-", "supervisor": supervisor or "Não informado",
-                    "horas_trabalhadas": horas, "carga_padrao": carga, "adicional_tipo": "50%",
-                    "horas_extras": calc["horas_50"], "status_pendencia": st_pend,
-                    "mensagem": f"Excedeu jornada ({carga:.0f}h): {calc['horas_50']:.1f}h extras (50%)."
-                }
-            elif carga > 0 and horas < carga:
-                item_pendencia = {
-                    "data": d_data, "funcionario_id": f_id, "funcionario": nome,
-                    "matricula": matricula or "-", "supervisor": supervisor or "Não informado",
-                    "horas_trabalhadas": horas, "carga_padrao": carga, "adicional_tipo": "INCOMPLETA",
-                    "horas_extras": 0, "status_pendencia": st_pend,
-                    "mensagem": f"Jornada incompleta: Apontado {horas:.1f}h de {carga:.0f}h exigidas."
-                }
+            item_pendencia = None
 
-        if item_pendencia:
-            if not tipo_filtro or item_pendencia["adicional_tipo"] == tipo_filtro:
-                pendencias.append(item_pendencia)
+            if situacao == 'Deslocado' and horas == 0:
+                item_pendencia = {
+                    "data": d_data, "funcionario_id": f_id, "funcionario": nome,
+                    "matricula": matricula or "-", "supervisor": supervisor or "Não informado",
+                    "horas_trabalhadas": horas, "carga_padrao": 0, "adicional_tipo": "DESLOCADO",
+                    "horas_extras": 0, "status_pendencia": status_atual,
+                    "mensagem": "Funcionário Deslocado sem lançamento de Ordens de Serviço (OS)."
+                }
+            elif situacao in ['Presente', 'Deslocado']:
+                calc = calcular_regras_horas(d_data, horas)
+                carga = calc["carga_padrao"]
+                
+                if calc["horas_100"] > 0:
+                    motivo = "Trabalho em Domingo" if calc["dia_semana"] == 6 else "Trabalho em Feriado"
+                    item_pendencia = {
+                        "data": d_data, "funcionario_id": f_id, "funcionario": nome,
+                        "matricula": matricula or "-", "supervisor": supervisor or "Não informado",
+                        "horas_trabalhadas": horas, "carga_padrao": 0, "adicional_tipo": "100%",
+                        "horas_extras": calc["horas_100"], "status_pendencia": status_atual,
+                        "mensagem": f"{motivo}: {calc['horas_100']:.1f}h extras (100%)."
+                    }
+                elif calc["horas_70"] > 0:
+                    item_pendencia = {
+                        "data": d_data, "funcionario_id": f_id, "funcionario": nome,
+                        "matricula": matricula or "-", "supervisor": supervisor or "Não informado",
+                        "horas_trabalhadas": horas, "carga_padrao": 0, "adicional_tipo": "70%",
+                        "horas_extras": calc["horas_70"], "status_pendencia": status_atual,
+                        "mensagem": f"Trabalho em Sábado: {calc['horas_70']:.1f}h extras (70%)."
+                    }
+                elif calc["horas_50"] > 0:
+                    item_pendencia = {
+                        "data": d_data, "funcionario_id": f_id, "funcionario": nome,
+                        "matricula": matricula or "-", "supervisor": supervisor or "Não informado",
+                        "horas_trabalhadas": horas, "carga_padrao": carga, "adicional_tipo": "50%",
+                        "horas_extras": calc["horas_50"], "status_pendencia": status_atual,
+                        "mensagem": f"Excedeu jornada ({carga:.0f}h): {calc['horas_50']:.1f}h extras (50%)."
+                    }
+                elif carga > 0 and horas < carga:
+                    item_pendencia = {
+                        "data": d_data, "funcionario_id": f_id, "funcionario": nome,
+                        "matricula": matricula or "-", "supervisor": supervisor or "Não informado",
+                        "horas_trabalhadas": horas, "carga_padrao": carga, "adicional_tipo": "INCOMPLETA",
+                        "horas_extras": 0, "status_pendencia": status_atual,
+                        "mensagem": f"Jornada incompleta: Apontado {horas:.1f}h de {carga:.0f}h exigidas."
+                    }
+
+            if item_pendencia:
+                if not tipo_filtro or item_pendencia["adicional_tipo"] == tipo_filtro:
+                    pendencias.append(item_pendencia)
 
     return pendencias
-
-# --- AUTENTICAÇÃO E SESSÃO ---
-
-@app.route('/login', methods=['POST'])
-def login():
-    data = request.json
-    username = data.get('username', '').strip()
-    password = data.get('password', '').strip()
-
-    if not username or not password:
-        return jsonify({"erro": "Informe o usuário e a senha."}), 400
-
-    res = supabase.table('usuarios').select('*').eq('username', username).execute()
-    if not res.data:
-        return jsonify({"erro": "Usuário ou senha inválidos."}), 401
-
-    u = res.data[0]
-    if check_password_hash(u['password_hash'], password):
-        user_obj = User(id=u['id'], username=u['username'], nome=u['nome'], role=u['role'])
-        login_user(user_obj)
-        return jsonify({
-            "mensagem": "Login realizado com sucesso!",
-            "usuario": {"nome": u['nome'], "role": u['role'], "username": u['username']}
-        }), 200
-
-    return jsonify({"erro": "Usuário ou senha inválidos."}), 401
-
-@app.route('/logout', methods=['POST'])
-@login_required
-def logout():
-    logout_user()
-    return jsonify({"mensagem": "Logout realizado com sucesso!"}), 200
-
-@app.route('/api/usuario_atual', methods=['GET'])
-def usuario_atual():
-    if current_user.is_authenticated:
-        return jsonify({
-            "autenticado": True,
-            "nome": current_user.nome,
-            "role": current_user.role,
-            "username": current_user.username
-        })
-    return jsonify({"autenticado": False})
-
-@app.route('/api/usuarios', methods=['POST', 'GET', 'DELETE'])
-@login_required
-def gerenciar_usuarios():
-    # Somente administradores podem criar ou excluir usuários
-    if current_user.role != 'admin':
-        return jsonify({"erro": "Acesso negado. Apenas administradores podem gerenciar usuários."}), 403
-
-    if request.method == 'POST':
-        data = request.json
-        username = data.get('username', '').strip()
-        password = data.get('password', '').strip()
-        nome = data.get('nome', '').strip()
-        role = data.get('role', 'comum')
-
-        if not username or not password or not nome:
-            return jsonify({"erro": "Preencha todos os campos obrigatórios."}), 400
-
-        res_check = supabase.table('usuarios').select('id').eq('username', username).execute()
-        if res_check.data:
-            return jsonify({"erro": "Nome de usuário já cadastrado."}), 400
-
-        pwd_hash = generate_password_hash(password)
-        payload = {
-            "username": username,
-            "password_hash": pwd_hash,
-            "nome": nome,
-            "role": role if role in ['admin', 'comum'] else 'comum'
-        }
-
-        try:
-            supabase.table('usuarios').insert(payload).execute()
-            return jsonify({"mensagem": "Usuário cadastrado com sucesso!"}), 201
-        except Exception:
-            return jsonify({"erro": "Erro ao cadastrar usuário."}), 400
-
-    elif request.method == 'DELETE':
-        user_id = request.args.get('id')
-        if not user_id:
-            return jsonify({"erro": "ID do usuário é obrigatório."}), 400
-
-        if str(user_id) == str(current_user.id):
-            return jsonify({"erro": "Você não pode excluir sua própria conta enquanto logado."}), 400
-
-        supabase.table('usuarios').delete().eq('id', user_id).execute()
-        return jsonify({"mensagem": "Usuário excluído com sucesso!"}), 200
-
-    else:
-        res = supabase.table('usuarios').select('id, username, nome, role, created_at').order('nome').execute()
-        return jsonify(res.data)
 
 @app.route('/')
 def index():
     return render_template('index.html')
 
-# --- GERENCIAMENTO DE FUNCIONÁRIOS ---
+# --- GERENCIAMENTO E BUSCA DE FUNCIONÁRIOS ---
 
 @app.route('/api/funcionarios/buscar', methods=['GET'])
-@login_required
 def buscar_funcionarios():
-    q = request.args.get('q', '').strip()
-    query = supabase.table('funcionarios').select('id, matricula, nome, cargo, atuacao')
-    if q:
-        query = query.or_(f"nome.ilike.%{q}%,matricula.ilike.%{q}%,cargo.ilike.%{q}%")
-    
-    res = query.order('nome').limit(10).execute()
-    return jsonify(res.data)
+    q = request.args.get('q', '').strip().lower()
+    with sqlite3.connect(DB_NAME) as conn:
+        cursor = conn.cursor()
+        if q:
+            cursor.execute('''
+                SELECT id, matricula, nome, cargo, atuacao 
+                FROM funcionarios 
+                WHERE LOWER(nome) LIKE ? OR LOWER(matricula) LIKE ? OR LOWER(cargo) LIKE ?
+                ORDER BY nome LIMIT 10
+            ''', (f"%{q}%", f"%{q}%", f"%{q}%"))
+        else:
+            cursor.execute('SELECT id, matricula, nome, cargo, atuacao FROM funcionarios ORDER BY nome LIMIT 10')
+        rows = cursor.fetchall()
+    return jsonify([{"id": r[0], "matricula": r[1], "nome": r[2], "cargo": r[3], "atuacao": r[4]} for r in rows])
 
 @app.route('/api/funcionarios', methods=['GET', 'POST', 'PUT', 'DELETE'])
-@login_required
 def gerenciar_funcionarios():
-    if request.method in ['POST', 'PUT', 'DELETE'] and current_user.role != 'admin':
-        return jsonify({"erro": "Apenas administradores podem modificar dados de funcionários."}), 403
-
     if request.method == 'POST':
         data = request.json
-        payload = {
-            "matricula": data.get('matricula'),
-            "nome": data.get('nome'),
-            "cargo": data.get('cargo'),
-            "atuacao": data.get('atuacao', 'GERAL'),
-            "supervisor": data.get('supervisor'),
-            "inicio_atividades": data.get('inicio_atividades') or None
-        }
         try:
-            supabase.table('funcionarios').insert(payload).execute()
+            with sqlite3.connect(DB_NAME) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "INSERT INTO funcionarios (matricula, nome, cargo, atuacao, supervisor) VALUES (?, ?, ?, ?, ?)",
+                    (data.get('matricula'), data.get('nome'), data.get('cargo'), data.get('atuacao', 'GERAL'), data.get('supervisor'))
+                )
+                conn.commit()
             return jsonify({"mensagem": "Funcionário cadastrado!"}), 201
-        except Exception as e:
-            return jsonify({"erro": "Erro ao cadastrar funcionário. Verifique se a matrícula já existe."}), 400
+        except sqlite3.IntegrityError:
+            return jsonify({"erro": "A matrícula inserida já está cadastrada."}), 400
 
     elif request.method == 'PUT':
         data = request.json
-        f_id = data.get('id')
-        payload = {
-            "matricula": data.get('matricula'),
-            "nome": data.get('nome'),
-            "cargo": data.get('cargo'),
-            "atuacao": data.get('atuacao'),
-            "supervisor": data.get('supervisor'),
-            "inicio_atividades": data.get('inicio_atividades') or None
-        }
         try:
-            supabase.table('funcionarios').update(payload).eq('id', f_id).execute()
+            with sqlite3.connect(DB_NAME) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    UPDATE funcionarios 
+                    SET matricula = ?, nome = ?, cargo = ?, atuacao = ?, supervisor = ?
+                    WHERE id = ?
+                ''', (data.get('matricula'), data.get('nome'), data.get('cargo'), data.get('atuacao'), data.get('supervisor'), data.get('id')))
+                conn.commit()
             return jsonify({"mensagem": "Funcionário atualizado!"}), 200
-        except Exception:
-            return jsonify({"erro": "Erro ao atualizar o funcionário."}), 400
+        except sqlite3.IntegrityError:
+            return jsonify({"erro": "A matrícula inserida já pertence a outro funcionário."}), 400
 
     elif request.method == 'DELETE':
         func_id = request.args.get('id')
         if not func_id:
             return jsonify({"erro": "ID do funcionário é obrigatório."}), 400
 
-        supabase.table('funcionarios').delete().eq('id', func_id).execute()
+        with sqlite3.connect(DB_NAME) as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM apropriacoes WHERE funcionario_id = ?", (func_id,))
+            cursor.execute("DELETE FROM presencas WHERE funcionario_id = ?", (func_id,))
+            cursor.execute("DELETE FROM funcionarios WHERE id = ?", (func_id,))
+            conn.commit()
+
         return jsonify({"mensagem": "Funcionário excluído com sucesso!"}), 200
 
     else:
-        res = supabase.table('funcionarios').select('id, matricula, nome, cargo, atuacao, supervisor, inicio_atividades').order('atuacao').order('nome').execute()
-        return jsonify(res.data)
-
-@app.route('/api/funcionarios/<int:func_id>/detalhes', methods=['GET'])
-@login_required
-def obter_detalhes_funcionario(func_id):
-    res_func = supabase.table('funcionarios').select('*').eq('id', func_id).execute()
-    if not res_func.data:
-        return jsonify({"erro": "Funcionário não encontrado."}), 404
-
-    f_info = res_func.data[0]
-    res_presenca = supabase.table('presencas').select('data, situacao, observacao').eq('funcionario_id', func_id).order('data', desc=True).limit(10).execute().data
-    res_aprop = supabase.table('apropriacoes').select('data, horas').eq('funcionario_id', func_id).execute().data
-
-    horas_map = {}
-    for ap in res_aprop:
-        horas_map[ap['data']] = horas_map.get(ap['data'], 0.0) + float(ap['horas'])
-
-    historico = []
-    for p in res_presenca:
-        historico.append({
-            "data": p['data'],
-            "situacao": p['situacao'],
-            "horas": horas_map.get(p['data'], 0.0),
-            "observacao": p.get('observacao', '')
-        })
-
-    return jsonify({"info": f_info, "historico": historico})
+        with sqlite3.connect(DB_NAME) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT id, matricula, nome, cargo, atuacao, supervisor FROM funcionarios ORDER BY atuacao, nome")
+            rows = cursor.fetchall()
+        return jsonify([{"id": r[0], "matricula": r[1], "nome": r[2], "cargo": r[3], "atuacao": r[4], "supervisor": r[5]} for r in rows])
 
 # --- LANÇAMENTO POR OS ---
 
 @app.route('/api/os/lancamento', methods=['POST'])
-@login_required
 def salvar_lancamento_os():
     data_req = request.json
     ordem_servico = data_req.get('ordem_servico', '').strip()
@@ -380,87 +280,82 @@ def salvar_lancamento_os():
     if not ordem_servico or not data_reg or horas <= 0 or not funcionarios_ids:
         return jsonify({"erro": "Preencha todos os campos obrigatórios e selecione ao menos um funcionário."}), 400
 
-    obs_texto = f"OS: {ordem_servico} - {descricao}" if descricao else f"OS: {ordem_servico}"
+    with sqlite3.connect(DB_NAME) as conn:
+        cursor = conn.cursor()
+        for f_id in funcionarios_ids:
+            cursor.execute('''
+                INSERT INTO presencas (data, funcionario_id, situacao, observacao, status_pendencia)
+                VALUES (?, ?, 'Presente', ?, 'PENDENTE')
+                ON CONFLICT(data, funcionario_id) DO UPDATE SET
+                    situacao = 'Presente',
+                    observacao = CASE 
+                        WHEN observacao IS NULL OR observacao = '' THEN excluded.observacao
+                        ELSE observacao || ' | ' || excluded.observacao
+                    END,
+                    status_pendencia = 'PENDENTE'
+            ''', (data_reg, f_id, f"OS: {ordem_servico} - {descricao}" if descricao else f"OS: {ordem_servico}"))
 
-    for f_id in funcionarios_ids:
-        res_p = supabase.table('presencas').select('observacao').eq('data', data_reg).eq('funcionario_id', f_id).execute()
-        
-        if res_p.data:
-            obs_atual = res_p.data[0].get('observacao') or ''
-            nova_obs = f"{obs_atual} | {obs_texto}" if obs_atual else obs_texto
-            supabase.table('presencas').update({
-                'situacao': 'Presente',
-                'observacao': nova_obs,
-                'status_pendencia': 'PENDENTE'
-            }).eq('data', data_reg).eq('funcionario_id', f_id).execute()
-        else:
-            supabase.table('presencas').insert({
-                'data': data_reg,
-                'funcionario_id': f_id,
-                'situacao': 'Presente',
-                'observacao': obs_texto,
-                'status_pendencia': 'PENDENTE'
-            }).execute()
+            cursor.execute('''
+                INSERT INTO apropriacoes (data, funcionario_id, ordem_servico, horas)
+                VALUES (?, ?, ?, ?)
+            ''', (data_reg, f_id, ordem_servico, horas))
 
-        supabase.table('apropriacoes').insert({
-            'data': data_reg,
-            'funcionario_id': f_id,
-            'ordem_servico': ordem_servico,
-            'horas': horas
-        }).execute()
+        conn.commit()
 
     return jsonify({"mensagem": f"OS {ordem_servico} lançada para {len(funcionarios_ids)} funcionário(s)!"}), 200
 
 # --- GRADE MATRICIAL ---
 
 @app.route('/api/grade', methods=['GET'])
-@login_required
 def obter_grade():
     ano = int(request.args.get('ano', date.today().year))
     mes = int(request.args.get('mes', date.today().month))
     supervisor_filtro = request.args.get('supervisor', '')
 
     _, num_dias = calendar.monthrange(ano, mes)
-    inicio_mes = f"{ano}-{mes:02d}-01"
-    fim_mes = f"{ano}-{mes:02d}-{num_dias:02d}"
 
-    q_func = supabase.table('funcionarios').select('id, matricula, nome, cargo, atuacao, supervisor')
-    if supervisor_filtro:
-        q_func = q_func.eq('supervisor', supervisor_filtro)
-    funcionarios = q_func.order('atuacao').order('nome').execute().data
+    with sqlite3.connect(DB_NAME) as conn:
+        cursor = conn.cursor()
+        
+        query_func = "SELECT id, matricula, nome, cargo, atuacao, supervisor FROM funcionarios"
+        params = []
+        if supervisor_filtro:
+            query_func += " WHERE supervisor = ?"
+            params.append(supervisor_filtro)
+        query_func += " ORDER BY atuacao, nome"
 
-    res_sup = supabase.table('funcionarios').select('supervisor').not_.is_('supervisor', 'null').neq('supervisor', '').execute()
-    supervisores = sorted(list({r['supervisor'] for r in res_sup.data}))
+        cursor.execute(query_func, params)
+        funcionarios = [{"id": r[0], "matricula": r[1], "nome": r[2], "cargo": r[3], "atuacao": r[4], "supervisor": r[5]} for r in cursor.fetchall()]
 
-    res_presencas = supabase.table('presencas').select('funcionario_id, data, situacao, observacao, status_pendencia').gte('data', inicio_mes).lte('data', fim_mes).execute().data
-    res_apropriacoes = supabase.table('apropriacoes').select('funcionario_id, data, horas').gte('data', inicio_mes).lte('data', fim_mes).execute().data
+        cursor.execute("SELECT DISTINCT supervisor FROM funcionarios WHERE supervisor IS NOT NULL AND supervisor != '' ORDER BY supervisor")
+        supervisores = [r[0] for r in cursor.fetchall()]
 
-    horas_map = {}
-    for ap in res_apropriacoes:
-        chave = f"{ap['funcionario_id']}_{ap['data']}"
-        horas_map[chave] = horas_map.get(chave, 0.0) + float(ap['horas'])
+        inicio_mes = f"{ano}-{mes:02d}-01"
+        fim_mes = f"{ano}-{mes:02d}-{num_dias:02d}"
 
-    lancamentos = {}
-    for p in res_presencas:
-        f_id = p['funcionario_id']
-        d_data = p['data']
-        sit = p['situacao']
-        obs = p.get('observacao', '')
-        st_pend = p.get('status_pendencia') or 'PENDENTE'
-        h_tot = horas_map.get(f"{f_id}_{d_data}", 0.0)
+        cursor.execute('''
+            SELECT p.funcionario_id, p.data, p.situacao, p.observacao, p.status_pendencia, COALESCE(SUM(a.horas), 0)
+            FROM presencas p
+            LEFT JOIN apropriacoes a ON p.funcionario_id = a.funcionario_id AND p.data = a.data
+            WHERE p.data BETWEEN ? AND ?
+            GROUP BY p.funcionario_id, p.data
+        ''', (inicio_mes, fim_mes))
+        
+        lancamentos = {}
+        for row in cursor.fetchall():
+            f_id, d_data, sit, obs, st_pend, h_tot = row
+            if f_id not in lancamentos:
+                lancamentos[f_id] = {}
+            
+            calc = calcular_regras_horas(d_data, h_tot) if sit in ['Presente', 'Deslocado'] else {"carga_padrao": 0, "horas_50": 0, "horas_70": 0, "horas_100": 0}
 
-        if f_id not in lancamentos:
-            lancamentos[f_id] = {}
-
-        calc = calcular_regras_horas(d_data, h_tot) if sit in ['Presente', 'Deslocado'] else {"carga_padrao": 0, "horas_50": 0, "horas_70": 0, "horas_100": 0}
-
-        lancamentos[f_id][d_data] = {
-            "situacao": sit,
-            "observacao": obs,
-            "status_pendencia": st_pend,
-            "horas": h_tot,
-            "calc": calc
-        }
+            lancamentos[f_id][d_data] = {
+                "situacao": sit,
+                "observacao": obs,
+                "status_pendencia": st_pend or 'PENDENTE',
+                "horas": h_tot,
+                "calc": calc
+            }
 
     return jsonify({
         "num_dias": num_dias,
@@ -474,7 +369,6 @@ def obter_grade():
 # --- PENDÊNCIAS E EXPORTAÇÃO EXCEL ---
 
 @app.route('/api/pendencias', methods=['GET'])
-@login_required
 def obter_pendencias():
     ano = int(request.args.get('ano', date.today().year))
     mes = int(request.args.get('mes', date.today().month))
@@ -484,8 +378,10 @@ def obter_pendencias():
     data_inicio = request.args.get('data_inicio', '')
     data_fim = request.args.get('data_fim', '')
 
-    res_sup = supabase.table('funcionarios').select('supervisor').not_.is_('supervisor', 'null').neq('supervisor', '').execute()
-    supervisores = sorted(list({r['supervisor'] for r in res_sup.data}))
+    with sqlite3.connect(DB_NAME) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT DISTINCT supervisor FROM funcionarios WHERE supervisor IS NOT NULL AND supervisor != '' ORDER BY supervisor")
+        supervisores = [r[0] for r in cursor.fetchall()]
 
     pendencias = buscar_dados_pendencias(ano, mes, supervisor_filtro, tipo_filtro, busca_func, data_inicio, data_fim)
 
@@ -495,10 +391,7 @@ def obter_pendencias():
     })
 
 @app.route('/api/pendencias/exportar_excel', methods=['GET'])
-@login_required
 def exportar_pendencias_excel():
-    import pandas as pd
-    
     ano = int(request.args.get('ano', date.today().year))
     mes = int(request.args.get('mes', date.today().month))
     supervisor_filtro = request.args.get('supervisor', '')
@@ -511,9 +404,10 @@ def exportar_pendencias_excel():
 
     dados_excel = []
     for item in pendencias:
-        dt_br = "/".join(item['data'].split("-")[::-1])
+        dt_br = item['data'].split("-")[::-1]
+        dt_formatted = "/".join(dt_br)
         dados_excel.append({
-            "Data": dt_br,
+            "Data": dt_formatted,
             "Matrícula": item.get('matricula', '-'),
             "Funcionário": item['funcionario'],
             "Supervisor": item['supervisor'],
@@ -526,10 +420,11 @@ def exportar_pendencias_excel():
         })
 
     df = pd.DataFrame(dados_excel)
+    
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         df.to_excel(writer, index=False, sheet_name='Pendencias')
-
+    
     output.seek(0)
     nome_arquivo = f"Relatorio_Pendencias_{data_inicio or ano}_{data_fim or mes}.xlsx"
 
@@ -541,19 +436,25 @@ def exportar_pendencias_excel():
     )
 
 @app.route('/api/pendencias/sanar', methods=['POST'])
-@login_required
 def sanar_pendencia():
     data_req = request.json
     f_id = data_req.get('funcionario_id')
     data_reg = data_req.get('data')
 
-    supabase.table('presencas').update({'status_pendencia': 'SANADA'}).eq('funcionario_id', f_id).eq('data', data_reg).execute()
+    with sqlite3.connect(DB_NAME) as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            UPDATE presencas 
+            SET status_pendencia = 'SANADA' 
+            WHERE funcionario_id = ? AND data = ?
+        ''', (f_id, data_reg))
+        conn.commit()
+
     return jsonify({"mensagem": "Pendência sanada e removida com sucesso!"}), 200
 
-# --- DASHBOARD ---
+# --- DASHBOARD & METRICAS ---
 
 @app.route('/api/dashboard', methods=['GET'])
-@login_required
 def obter_dashboard():
     ano = int(request.args.get('ano', date.today().year))
     mes = int(request.args.get('mes', date.today().month))
@@ -562,65 +463,68 @@ def obter_dashboard():
     inicio_mes = f"{ano}-{mes:02d}-01"
     fim_mes = f"{ano}-{mes:02d}-{num_dias:02d}"
 
-    res_treinamento = supabase.table('presencas').select('data, funcionario_id').gte('data', inicio_mes).lte('data', fim_mes).eq('situacao', 'Treinamento').execute().data
+    with sqlite3.connect(DB_NAME) as conn:
+        cursor = conn.cursor()
 
-    treinamento_por_dia = {}
-    func_treinamento_unicos = set()
+        cursor.execute('''
+            SELECT data, COUNT(DISTINCT funcionario_id)
+            FROM presencas
+            WHERE data BETWEEN ? AND ? AND situacao = 'Treinamento'
+            GROUP BY data
+            ORDER BY data
+        ''', (inicio_mes, fim_mes))
+        treinamentos_diarios = [{"data": r[0].split('-')[2] + '/' + r[0].split('-')[1], "qtd": r[1]} for r in cursor.fetchall()]
 
-    for item in res_treinamento:
-        d = item['data']
-        f_id = item['funcionario_id']
-        func_treinamento_unicos.add(f_id)
-        treinamento_por_dia[d] = treinamento_por_dia.get(d, set())
-        treinamento_por_dia[d].add(f_id)
+        cursor.execute('''
+            SELECT COUNT(DISTINCT funcionario_id)
+            FROM presencas
+            WHERE data BETWEEN ? AND ? AND situacao = 'Treinamento'
+        ''', (inicio_mes, fim_mes))
+        total_func_treinamento = cursor.fetchone()[0] or 0
 
-    treinamentos_diarios = [
-        {"data": f"{d.split('-')[2]}/{d.split('-')[1]}", "qtd": len(funcs)}
-        for d, funcs in sorted(treinamento_por_dia.items())
-    ]
+        cursor.execute('''
+            SELECT p.data, p.funcionario_id, p.situacao, p.status_pendencia, COALESCE(SUM(a.horas), 0)
+            FROM presencas p
+            LEFT JOIN apropriacoes a ON p.funcionario_id = a.funcionario_id AND p.data = a.data
+            WHERE p.data BETWEEN ? AND ?
+            GROUP BY p.data, p.funcionario_id
+        ''', (inicio_mes, fim_mes))
 
-    res_presencas = supabase.table('presencas').select('data, funcionario_id, situacao, status_pendencia').gte('data', inicio_mes).lte('data', fim_mes).execute().data
-    res_apropriacoes = supabase.table('apropriacoes').select('funcionario_id, data, horas').gte('data', inicio_mes).lte('data', fim_mes).execute().data
+        func_extra_50 = set()
+        func_extra_70 = set()
+        func_extra_100 = set()
 
-    horas_map = {}
-    for ap in res_apropriacoes:
-        chave = f"{ap['funcionario_id']}_{ap['data']}"
-        horas_map[chave] = horas_map.get(chave, 0.0) + float(ap['horas'])
+        total_horas_extras = 0.0
+        qtd_pendencias = 0
 
-    func_extra_50, func_extra_70, func_extra_100 = set(), set(), set()
-    total_horas_extras = 0.0
-    qtd_pendencias = 0
+        for row in cursor.fetchall():
+            d_data, f_id, situacao, st_pend, horas = row
+            status_atual = st_pend or "PENDENTE"
 
-    for p in res_presencas:
-        d_data = p['data']
-        f_id = p['funcionario_id']
-        situacao = p['situacao']
-        st_pend = p.get('status_pendencia') or 'PENDENTE'
-        horas = horas_map.get(f"{f_id}_{d_data}", 0.0)
-
-        if st_pend != "SANADA":
-            if situacao == 'Deslocado' and horas == 0:
-                qtd_pendencias += 1
-            elif situacao in ['Presente', 'Deslocado']:
-                calc = calcular_regras_horas(d_data, horas)
-                if calc["horas_100"] > 0 or calc["horas_70"] > 0 or calc["horas_50"] > 0 or (calc["carga_padrao"] > 0 and horas < calc["carga_padrao"]):
+            if status_atual != "SANADA":
+                if situacao == 'Deslocado' and horas == 0:
                     qtd_pendencias += 1
+                elif situacao in ['Presente', 'Deslocado']:
+                    calc = calcular_regras_horas(d_data, horas)
+                    if calc["horas_100"] > 0 or calc["horas_70"] > 0 or calc["horas_50"] > 0 or (calc["carga_padrao"] > 0 and horas < calc["carga_padrao"]):
+                        qtd_pendencias += 1
 
-        if situacao in ['Presente', 'Deslocado']:
-            calc = calcular_regras_horas(d_data, horas)
-            if calc["horas_50"] > 0:
-                func_extra_50.add(f_id)
-                total_horas_extras += calc["horas_50"]
-            if calc["horas_70"] > 0:
-                func_extra_70.add(f_id)
-                total_horas_extras += calc["horas_70"]
-            if calc["horas_100"] > 0:
-                func_extra_100.add(f_id)
-                total_horas_extras += calc["horas_100"]
+            if situacao in ['Presente', 'Deslocado']:
+                calc = calcular_regras_horas(d_data, horas)
+                
+                if calc["horas_50"] > 0:
+                    func_extra_50.add(f_id)
+                    total_horas_extras += calc["horas_50"]
+                if calc["horas_70"] > 0:
+                    func_extra_70.add(f_id)
+                    total_horas_extras += calc["horas_70"]
+                if calc["horas_100"] > 0:
+                    func_extra_100.add(f_id)
+                    total_horas_extras += calc["horas_100"]
 
     return jsonify({
         "qtd_pendencias": qtd_pendencias,
-        "total_func_treinamento": len(func_treinamento_unicos),
+        "total_func_treinamento": total_func_treinamento,
         "treinamentos_diarios": treinamentos_diarios,
         "total_horas_extras": round(total_horas_extras, 1),
         "funcionarios_extras": {
@@ -630,60 +534,60 @@ def obter_dashboard():
         }
     })
 
-# --- QUADRO DE TAREFAS ---
+# --- QUADRO DE TAREFAS (TRELLO) ---
 
 @app.route('/api/tarefas', methods=['GET', 'POST', 'PUT', 'DELETE'])
-@login_required
 def gerenciar_tarefas():
-    if request.method == 'GET':
-        res = supabase.table('tarefas').select('*').execute()
-        return jsonify(res.data)
+    with sqlite3.connect(DB_NAME) as conn:
+        cursor = conn.cursor()
+        
+        if request.method == 'GET':
+            cursor.execute("SELECT id, titulo, descricao, responsavel, prioridade, status FROM tarefas")
+            rows = cursor.fetchall()
+            return jsonify([{"id": r[0], "titulo": r[1], "descricao": r[2], "responsavel": r[3], "prioridade": r[4], "status": r[5]} for r in rows])
+            
+        elif request.method == 'POST':
+            data = request.json
+            cursor.execute(
+                "INSERT INTO tarefas (titulo, descricao, responsavel, prioridade, status) VALUES (?, ?, ?, ?, 'A Fazer')",
+                (data.get('titulo'), data.get('descricao'), data.get('responsavel'), data.get('prioridade'))
+            )
+            conn.commit()
+            return jsonify({"mensagem": "Tarefa criada!"}), 201
 
-    elif request.method == 'POST':
-        data = request.json
-        payload = {
-            "titulo": data.get('titulo'),
-            "descricao": data.get('descricao'),
-            "responsavel": data.get('responsavel'),
-            "prioridade": data.get('prioridade'),
-            "status": 'A Fazer'
-        }
-        supabase.table('tarefas').insert(payload).execute()
-        return jsonify({"mensagem": "Tarefa criada!"}), 201
+        elif request.method == 'PUT':
+            data = request.json
+            cursor.execute("UPDATE tarefas SET status = ? WHERE id = ?", (data.get('status'), data.get('id')))
+            conn.commit()
+            return jsonify({"mensagem": "Status atualizado!"}), 200
 
-    elif request.method == 'PUT':
-        data = request.json
-        supabase.table('tarefas').update({'status': data.get('status')}).eq('id', data.get('id')).execute()
-        return jsonify({"mensagem": "Status atualizado!"}), 200
-
-    elif request.method == 'DELETE':
-        tarefa_id = request.args.get('id')
-        supabase.table('tarefas').delete().eq('id', tarefa_id).execute()
-        return jsonify({"mensagem": "Tarefa excluída!"}), 200
+        elif request.method == 'DELETE':
+            tarefa_id = request.args.get('id')
+            cursor.execute("DELETE FROM tarefas WHERE id = ?", (tarefa_id,))
+            conn.commit()
+            return jsonify({"mensagem": "Tarefa excluída!"}), 200
 
 # --- DETALHES E SALVAMENTO ---
 
 @app.route('/api/lancamento/detalhes', methods=['GET'])
-@login_required
 def obter_detalhes_lancamento():
     f_id = request.args.get('funcionario_id')
     data_reg = request.args.get('data')
 
-    res_presenca = supabase.table('presencas').select('situacao, observacao').eq('funcionario_id', f_id).eq('data', data_reg).execute()
-    if not res_presenca.data:
-        return jsonify({"situacao": "Presente", "observacao": "", "apropriacoes": []})
+    with sqlite3.connect(DB_NAME) as conn:
+        cursor = conn.cursor()
+        cursor.execute('SELECT situacao, observacao FROM presencas WHERE funcionario_id = ? AND data = ?', (f_id, data_reg))
+        presenca = cursor.fetchone()
 
-    p_data = res_presenca.data[0]
-    res_apropriacoes = supabase.table('apropriacoes').select('ordem_servico, horas').eq('funcionario_id', f_id).eq('data', data_reg).execute()
+        if not presenca:
+            return jsonify({"situacao": "Presente", "observacao": "", "apropriacoes": []})
 
-    return jsonify({
-        "situacao": p_data.get('situacao', 'Presente'),
-        "observacao": p_data.get('observacao', ''),
-        "apropriacoes": res_apropriacoes.data
-    })
+        cursor.execute('SELECT ordem_servico, horas FROM apropriacoes WHERE funcionario_id = ? AND data = ?', (f_id, data_reg))
+        apropriacoes = [{"ordem_servico": r[0], "horas": r[1]} for r in cursor.fetchall()]
+
+    return jsonify({"situacao": presenca[0], "observacao": presenca[1] or "", "apropriacoes": apropriacoes})
 
 @app.route('/api/lancamento', methods=['POST'])
-@login_required
 def salvar_lancamento():
     data_req = request.json
     data_reg = data_req.get('data')
@@ -692,39 +596,26 @@ def salvar_lancamento():
     obs = data_req.get('observacao', '')
     apropriacoes = data_req.get('apropriacoes', [])
 
-    res_p = supabase.table('presencas').select('id').eq('data', data_reg).eq('funcionario_id', f_id).execute()
-    
-    if res_p.data:
-        supabase.table('presencas').update({
-            'situacao': situacao,
-            'observacao': obs,
-            'status_pendencia': 'PENDENTE'
-        }).eq('data', data_reg).eq('funcionario_id', f_id).execute()
-    else:
-        supabase.table('presencas').insert({
-            'data': data_reg,
-            'funcionario_id': f_id,
-            'situacao': situacao,
-            'observacao': obs,
-            'status_pendencia': 'PENDENTE'
-        }).execute()
+    with sqlite3.connect(DB_NAME) as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO presencas (data, funcionario_id, situacao, observacao, status_pendencia)
+            VALUES (?, ?, ?, ?, 'PENDENTE')
+            ON CONFLICT(data, funcionario_id) DO UPDATE SET
+                situacao=excluded.situacao,
+                observacao=excluded.observacao,
+                status_pendencia='PENDENTE'
+        ''', (data_reg, f_id, situacao, obs))
 
-    supabase.table('apropriacoes').delete().eq('data', data_reg).eq('funcionario_id', f_id).execute()
+        cursor.execute("DELETE FROM apropriacoes WHERE data = ? AND funcionario_id = ?", (data_reg, f_id))
+        if situacao in ['Presente', 'Deslocado']:
+            for item in apropriacoes:
+                cursor.execute('INSERT INTO apropriacoes (data, funcionario_id, ordem_servico, horas) VALUES (?, ?, ?, ?)', (data_reg, f_id, item['ordem_servico'], float(item['horas'])))
 
-    if situacao in ['Presente', 'Deslocado']:
-        novas_apropriacoes = [
-            {
-                'data': data_reg,
-                'funcionario_id': f_id,
-                'ordem_servico': item['ordem_servico'],
-                'horas': float(item['horas'])
-            }
-            for item in apropriacoes
-        ]
-        if novas_apropriacoes:
-            supabase.table('apropriacoes').insert(novas_apropriacoes).execute()
+        conn.commit()
 
     return jsonify({"mensagem": "Lançamento salvo com sucesso!"}), 200
 
 if __name__ == '__main__':
+    init_db()
     app.run(debug=True, port=5000)
