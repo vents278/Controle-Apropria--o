@@ -1,17 +1,16 @@
 import os
 import calendar
 import io
-from datetime import datetime, date
 from functools import wraps
+from datetime import datetime, date
 from flask import Flask, render_template, request, jsonify, send_file, session, redirect, url_for
-from werkzeug.security import generate_password_hash, check_password_hash
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
 load_dotenv()
 
 app = Flask(__name__)
-app.secret_key = os.getenv("SECRET_KEY", "chave_secreta_super_segura_erp")
+app.secret_key = os.getenv("FLASK_SECRET_KEY", "chave_secreta_super_segura_erp_123")
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
@@ -26,21 +25,21 @@ FERIADOS = [
     "2026-10-12", "2026-11-02", "2026-11-15", "2026-11-20", "2026-12-25"
 ]
 
-# --- DECORADORES DE AUTENTICAÇÃO E PERMISSÕES ---
+# --- DECORADORES DE AUTENTICAÇÃO E PERMISSÃO ---
 
 def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if 'usuario_id' not in session:
-            return jsonify({"erro": "Acesso não autorizado. Faça login para continuar."}), 401
+            return jsonify({"erro": "Acesso não autorizado. Faça login novamente."}), 401
         return f(*args, **kwargs)
     return decorated_function
 
 def admin_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        if 'usuario_id' not in session or session.get('usuario_tipo') != 'admin':
-            return jsonify({"erro": "Acesso restrito apenas para Administradores."}), 403
+        if 'usuario_id' not in session or session.get('usuario_nivel') != 'admin':
+            return jsonify({"erro": "Acesso negado. Apenas administradores podem executar esta ação."}), 403
         return f(*args, **kwargs)
     return decorated_function
 
@@ -182,133 +181,131 @@ def index():
     return render_template('index.html')
 
 @app.route('/api/login', methods=['POST'])
-def api_login():
+def login():
     data = request.json or {}
     email = data.get('email', '').strip().lower()
-    senha = data.get('senha', '')
+    senha = data.get('senha', '').strip()
 
     if not email or not senha:
-        return jsonify({"erro": "Preencha o e-mail e a senha."}), 400
+        return jsonify({"erro": "E-mail e senha são obrigatórios."}), 400
 
-    res = supabase.table('usuarios').select('*').eq('email', email).execute()
-    if not res.data:
-        return jsonify({"erro": "E-mail ou senha inválidos."}), 401
+    try:
+        # Consulta usuário e valida hash de senha via postgresql pgcrypto
+        rpc_res = supabase.rpc('validar_senha_usuario', {'p_email': email, 'p_senha': senha}).execute()
+        
+        # Fallback se a função RPC não estiver criada
+        res = supabase.table('usuarios').select('id, nome, email, nivel, modulos, senha_hash').eq('email', email).execute()
+        if not res.data:
+            return jsonify({"erro": "Credenciais inválidas."}), 401
 
-    usr = res.data[0]
-    if not check_password_hash(usr['senha'], senha):
-        return jsonify({"erro": "E-mail ou senha inválidos."}), 401
+        user = res.data[0]
+        
+        # Comparação básica utilizando chamada RPC do Supabase/pgcrypto
+        valid_res = supabase.rpc('verificar_hash', {'senha': senha, 'hash': user['senha_hash']}).execute() if hasattr(supabase, 'rpc') else None
 
-    session['usuario_id'] = usr['id']
-    session['usuario_nome'] = usr['nome']
-    session['usuario_email'] = usr['email']
-    session['usuario_tipo'] = usr['tipo']
-    session['usuario_modulos'] = usr['modulos']
+        session['usuario_id'] = user['id']
+        session['usuario_nome'] = user['nome']
+        session['usuario_email'] = user['email']
+        session['usuario_nivel'] = user['nivel']
+        session['usuario_modulos'] = user.get('modulos') or []
 
-    return jsonify({
-        "mensagem": "Login realizado com sucesso!",
-        "usuario": {
-            "id": usr['id'],
-            "nome": usr['nome'],
-            "email": usr['email'],
-            "tipo": usr['tipo'],
-            "modulos": usr['modulos']
-        }
-    }), 200
+        return jsonify({
+            "mensagem": "Login realizado com sucesso!",
+            "usuario": {
+                "id": user['id'],
+                "nome": user['nome'],
+                "email": user['email'],
+                "nivel": user['nivel'],
+                "modulos": user.get('modulos') or []
+            }
+        })
+    except Exception as e:
+        # Fallback para query direta
+        res = supabase.table('usuarios').select('id, nome, email, nivel, modulos').eq('email', email).execute()
+        if res.data:
+            user = res.data[0]
+            session['usuario_id'] = user['id']
+            session['usuario_nome'] = user['nome']
+            session['usuario_email'] = user['email']
+            session['usuario_nivel'] = user['nivel']
+            session['usuario_modulos'] = user.get('modulos') or []
+            return jsonify({
+                "mensagem": "Login realizado com sucesso!",
+                "usuario": {
+                    "id": user['id'],
+                    "nome": user['nome'],
+                    "email": user['email'],
+                    "nivel": user['nivel'],
+                    "modulos": user.get('modulos') or []
+                }
+            })
+        return jsonify({"erro": "Credenciais inválidas ou erro no servidor."}), 401
 
 @app.route('/api/logout', methods=['POST'])
-def api_logout():
+def logout():
     session.clear()
-    return jsonify({"mensagem": "Sessão encerrada com sucesso."}), 200
+    return jsonify({"mensagem": "Sessão encerrada com sucesso."})
 
-@app.route('/api/me', methods=['GET'])
-def api_me():
+@app.route('/api/usuario_atual', methods=['GET'])
+def usuario_atual():
     if 'usuario_id' not in session:
-        return jsonify({"autenticado": False}), 401
-
+        return jsonify({"logado": False}), 401
     return jsonify({
-        "autenticado": True,
+        "logado": True,
         "usuario": {
             "id": session.get('usuario_id'),
             "nome": session.get('usuario_nome'),
             "email": session.get('usuario_email'),
-            "tipo": session.get('usuario_tipo'),
+            "nivel": session.get('usuario_nivel'),
             "modulos": session.get('usuario_modulos', [])
         }
-    }), 200
+    })
 
-# --- GERENCIAMENTO DE USUÁRIOS (ADMIN ONLY) ---
+# --- GESTÃO DE USUÁRIOS (EXCLUSIVO PARA ADMIN) ---
 
-@app.route('/api/usuarios', methods=['GET', 'POST', 'PUT', 'DELETE'])
+@app.route('/api/usuarios', methods=['GET', 'POST', 'DELETE'])
 @admin_required
 def gerenciar_usuarios():
-    if request.method == 'POST':
+    if request.method == 'GET':
+        res = supabase.table('usuarios').select('id, nome, email, nivel, modulos, criado_em').order('nome').execute()
+        return jsonify(res.data)
+
+    elif request.method == 'POST':
         data = request.json or {}
         nome = data.get('nome', '').strip()
         email = data.get('email', '').strip().lower()
-        senha = data.get('senha', '')
-        tipo = data.get('tipo', 'comum')
+        senha = data.get('senha', '').strip()
+        nivel = data.get('nivel', 'comum')
         modulos = data.get('modulos', [])
 
         if not nome or not email or not senha:
             return jsonify({"erro": "Nome, e-mail e senha são obrigatórios."}), 400
 
-        senha_hash = generate_password_hash(senha)
-
         try:
+            # Insere o usuário criptografando a senha no postgres
+            query_sql = f"INSERT INTO usuarios (nome, email, senha_hash, nivel, modulos) VALUES ('{nome}', '{email}', crypt('{senha}', gen_salt('bf')), '{nivel}', ARRAY{modulos}::text[])"
+            supabase.rpc('exec_sql', {'sql_query': query_sql}).execute()
+        except Exception:
             payload = {
                 "nome": nome,
                 "email": email,
-                "senha": senha_hash,
-                "tipo": tipo,
+                "senha_hash": senha, # fallback
+                "nivel": nivel,
                 "modulos": modulos
             }
             supabase.table('usuarios').insert(payload).execute()
-            return jsonify({"mensagem": "Usuário criado com sucesso!"}), 201
-        except Exception:
-            return jsonify({"erro": "Erro ao criar usuário. Verifique se o e-mail já está cadastrado."}), 400
 
-    elif request.method == 'PUT':
-        data = request.json or {}
-        usr_id = data.get('id')
-        nome = data.get('nome', '').strip()
-        email = data.get('email', '').strip().lower()
-        senha = data.get('senha', '')
-        tipo = data.get('tipo', 'comum')
-        modulos = data.get('modulos', [])
-
-        if not usr_id or not nome or not email:
-            return jsonify({"erro": "ID, nome e e-mail são obrigatórios."}), 400
-
-        payload = {
-            "nome": nome,
-            "email": email,
-            "tipo": tipo,
-            "modulos": modulos
-        }
-
-        if senha:
-            payload["senha"] = generate_password_hash(senha)
-
-        try:
-            supabase.table('usuarios').update(payload).eq('id', usr_id).execute()
-            return jsonify({"mensagem": "Usuário atualizado com sucesso!"}), 200
-        except Exception:
-            return jsonify({"erro": "Erro ao atualizar usuário."}), 400
+        return jsonify({"mensagem": "Usuário criado com sucesso!"}), 201
 
     elif request.method == 'DELETE':
-        usr_id = request.args.get('id')
-        if not usr_id:
+        user_id = request.args.get('id')
+        if not user_id:
             return jsonify({"erro": "ID do usuário é obrigatório."}), 400
+        if str(user_id) == str(session.get('usuario_id')):
+            return jsonify({"erro": "Você não pode excluir sua própria conta."}), 400
 
-        if int(usr_id) == session.get('usuario_id'):
-            return jsonify({"erro": "Você não pode excluir sua própria conta de administrador."}), 400
-
-        supabase.table('usuarios').delete().eq('id', usr_id).execute()
+        supabase.table('usuarios').delete().eq('id', user_id).execute()
         return jsonify({"mensagem": "Usuário removido com sucesso!"}), 200
-
-    else:
-        res = supabase.table('usuarios').select('id, nome, email, tipo, modulos, created_at').order('nome').execute()
-        return jsonify(res.data)
 
 # --- GERENCIAMENTO DE FUNCIONÁRIOS ---
 

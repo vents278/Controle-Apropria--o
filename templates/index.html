@@ -10,25 +10,25 @@
 
   <header class="header">
     <div class="logo"><strong>ERP</strong> Gestão de Horas e Presença</div>
-    <nav id="navbarModulos">
-      <button class="nav-btn modulo-nav" id="nav-paginaDashboard" onclick="mostrarPagina('paginaDashboard', event)">Dashboard Analytics</button>
-      <button class="nav-btn modulo-nav" id="nav-paginaOS" onclick="mostrarPagina('paginaOS', event)">Lançamento de OS</button>
-      <button class="nav-btn modulo-nav" id="nav-paginaGrade" onclick="mostrarPagina('paginaGrade', event)">Grade de Presença</button>
-      <button class="nav-btn modulo-nav" id="nav-paginaPendencias" onclick="mostrarPagina('paginaPendencias', event)">Pendências & Horas Extras</button>
-      <button class="nav-btn modulo-nav" id="nav-paginaTarefas" onclick="mostrarPagina('paginaTarefas', event)">Quadro de Tarefas</button>
-      <button class="nav-btn modulo-nav" id="nav-paginaCadastro" onclick="mostrarPagina('paginaCadastro', event)">Cadastros</button>
-      <button class="nav-btn modulo-nav" id="nav-paginaUsuarios" onclick="mostrarPagina('paginaUsuarios', event)" style="display: none;">Usuários</button>
+    <nav id="navbar">
+      <button id="btn-paginaDashboard" class="nav-btn active" onclick="mostrarPagina('paginaDashboard', event)">Dashboard Analytics</button>
+      <button id="btn-paginaOS" class="nav-btn" onclick="mostrarPagina('paginaOS', event)">Lançamento de OS</button>
+      <button id="btn-paginaGrade" class="nav-btn" onclick="mostrarPagina('paginaGrade', event)">Grade de Presença</button>
+      <button id="btn-paginaPendencias" class="nav-btn" onclick="mostrarPagina('paginaPendencias', event)">Pendências & Horas Extras</button>
+      <button id="btn-paginaTarefas" class="nav-btn" onclick="mostrarPagina('paginaTarefas', event)">Quadro de Tarefas</button>
+      <button id="btn-paginaCadastro" class="nav-btn" onclick="mostrarPagina('paginaCadastro', event)">Cadastros</button>
+      <button id="btn-paginaUsuarios" class="nav-btn admin-only" onclick="mostrarPagina('paginaUsuarios', event)">Gestão de Usuários</button>
     </nav>
     <div class="user-info">
-      <span id="labelNomeUsuario">👤 Usuário</span>
-      <button class="btn-logout" onclick="efetuarLogout()">Sair</button>
+      <span id="nomeUsuarioLogado">👤 Carregando...</span>
+      <button onclick="efetuarLogout()" class="btn-logout">Sair</button>
     </div>
   </header>
 
   <main class="main-container">
 
     <!-- 0. DASHBOARD ANALYTICS -->
-    <section id="paginaDashboard" class="page">
+    <section id="paginaDashboard" class="page active">
       <div class="filter-bar">
         <h2>Painel Geral e Indicadores Gerenciais</h2>
         <div class="filter-controls">
@@ -349,55 +349,47 @@
       </div>
     </section>
 
-    <!-- 5. GESTÃO DE USUÁRIOS E PERMISSÕES (SOMENTE ADMIN) -->
+    <!-- 5. GESTÃO DE USUÁRIOS (EXCLUSIVO ADMIN) -->
     <section id="paginaUsuarios" class="page">
-      <h2 id="tituloFormUsuario">Cadastrar Novo Usuário</h2>
-      <form id="formCadastroUsuario" class="card-form" style="max-width: 650px;">
-        <input type="hidden" id="usrId">
-        
+      <h2>Cadastrar Novo Usuário</h2>
+      <form id="formUsuario" class="card-form" style="max-width: 600px;">
         <div class="form-group">
           <label>Nome Completo:</label>
           <input type="text" id="usrNome" required placeholder="Ex: Maria Souza">
         </div>
-
         <div class="form-group">
-          <label>E-mail Corporativo (Login):</label>
-          <input type="email" id="usrEmail" required placeholder="maria.souza@empresa.com">
+          <label>E-mail:</label>
+          <input type="email" id="usrEmail" required placeholder="exemplo@empresa.com">
         </div>
-
         <div class="form-group">
           <label>Senha:</label>
-          <input type="password" id="usrSenha" placeholder="Digite a senha (deixe em branco se não quiser alterar)">
+          <input type="password" id="usrSenha" required placeholder="••••••••">
         </div>
-
         <div class="form-group">
-          <label>Tipo de Nível de Acesso:</label>
-          <select id="usrTipo" onchange="alternarVisibilidadeModulos()">
+          <label>Nível de Acesso:</label>
+          <select id="usrNivel" onchange="alternarCheckboxModulos()">
             <option value="comum">Usuário Comum</option>
             <option value="admin">Administrador (Acesso Total)</option>
           </select>
         </div>
 
-        <div id="containerModulosAcesso" class="form-group">
-          <label>Módulos com Acesso Permitido:</label>
-          <div class="checkbox-group-grid">
-            <label class="checkbox-item"><input type="checkbox" name="chkModulo" value="paginaDashboard"> Dashboard Analytics</label>
-            <label class="checkbox-item"><input type="checkbox" name="chkModulo" value="paginaOS"> Lançamento de OS</label>
-            <label class="checkbox-item"><input type="checkbox" name="chkModulo" value="paginaGrade"> Grade de Presença</label>
-            <label class="checkbox-item"><input type="checkbox" name="chkModulo" value="paginaPendencias"> Pendências & Horas Extras</label>
-            <label class="checkbox-item"><input type="checkbox" name="chkModulo" value="paginaTarefas"> Quadro de Tarefas</label>
-            <label class="checkbox-item"><input type="checkbox" name="chkModulo" value="paginaCadastro"> Cadastros de Funcionários</label>
+        <div class="form-group" id="grupoModulosAcc">
+          <label>Módulos com Acesso Liberado:</label>
+          <div class="checkbox-grid">
+            <label><input type="checkbox" name="usrModulos" value="paginaDashboard" checked> Dashboard Analytics</label>
+            <label><input type="checkbox" name="usrModulos" value="paginaOS" checked> Lançamento de OS</label>
+            <label><input type="checkbox" name="usrModulos" value="paginaGrade" checked> Grade de Presença</label>
+            <label><input type="checkbox" name="usrModulos" value="paginaPendencias" checked> Pendências & Horas Extras</label>
+            <label><input type="checkbox" name="usrModulos" value="paginaTarefas" checked> Quadro de Tarefas</label>
+            <label><input type="checkbox" name="usrModulos" value="paginaCadastro" checked> Cadastros</label>
           </div>
         </div>
 
-        <div class="button-group margin-top">
-          <button type="submit" id="btnSalvarUsr" class="btn-primary">Salvar Usuário</button>
-          <button type="button" id="btnCancelarUsr" class="btn-secondary" style="display:none;" onclick="limparFormularioUsuario()">Cancelar Edição</button>
-        </div>
+        <button type="submit" class="btn-primary full-width" style="margin-top: 15px;">Cadastrar Usuário</button>
       </form>
 
-      <div class="section-header-cad">
-        <h3>Usuários Cadastrados no Sistema</h3>
+      <div class="section-header-cad" style="margin-top: 30px;">
+        <h3>Usuários do Sistema</h3>
       </div>
 
       <div class="table-scroll-wrapper" style="margin-top: 10px;">
@@ -406,8 +398,8 @@
             <tr>
               <th>Nome</th>
               <th>E-mail</th>
-              <th>Tipo</th>
-              <th>Módulos Permitidos</th>
+              <th>Nível</th>
+              <th>Módulos Autorizados</th>
               <th>Ações</th>
             </tr>
           </thead>

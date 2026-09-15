@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Login - ERP Gestão de Horas e Presença</title>
+  <title>Login - ERP Gestão</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body class="login-body">
@@ -11,35 +11,31 @@
   <div class="login-card">
     <div class="login-header">
       <h2>ERP Gestão</h2>
-      <p>Controle de Presença e Apropriação de Horas</p>
+      <p>Apropriação & Presença</p>
     </div>
 
-    <div id="loginAlert" class="alert danger" style="display: none;"></div>
-
-    <form id="formLogin" onsubmit="efetuarLogin(event)">
+    <form id="formLogin" onsubmit="realizarLogin(event)">
       <div class="form-group">
-        <label for="loginEmail">E-mail Corporativo:</label>
-        <input type="email" id="loginEmail" required placeholder="seu.email@empresa.com">
+        <label>E-mail Corporativo:</label>
+        <input type="email" id="loginEmail" placeholder="seu.email@empresa.com" required autofocus>
       </div>
 
       <div class="form-group">
-        <label for="loginSenha">Senha:</label>
-        <input type="password" id="loginSenha" required placeholder="••••••••">
+        <label>Senha:</label>
+        <input type="password" id="loginSenha" placeholder="••••••••" required>
       </div>
 
-      <button type="submit" id="btnLogin" class="btn-primary full-width margin-top">Entrar no Sistema</button>
+      <div id="loginErro" class="error-alert" style="display: none;"></div>
+
+      <button type="submit" class="btn-primary full-width" style="margin-top: 10px;">Entrar no Sistema</button>
     </form>
   </div>
 
   <script>
-    async function efetuarLogin(e) {
+    async function realizarLogin(e) {
       e.preventDefault();
-      const alertBox = document.getElementById("loginAlert");
-      const btn = document.getElementById("btnLogin");
-      
-      alertBox.style.display = "none";
-      btn.disabled = true;
-      btn.innerText = "Autenticando...";
+      const erroDiv = document.getElementById("loginErro");
+      erroDiv.style.display = "none";
 
       const email = document.getElementById("loginEmail").value;
       const senha = document.getElementById("loginSenha").value;
@@ -56,18 +52,14 @@
         if (res.ok) {
           window.location.href = "/";
         } else {
-          alertBox.innerText = data.erro || "Falha ao realizar login.";
-          alertBox.style.display = "block";
+          erroDiv.innerText = data.erro || "Falha na autenticação.";
+          erroDiv.style.display = "block";
         }
       } catch (err) {
-        alertBox.innerText = "Erro de conexão com o servidor.";
-        alertBox.style.display = "block";
-      } finally {
-        btn.disabled = false;
-        btn.innerText = "Entrar no Sistema";
+        erroDiv.innerText = "Erro ao conectar ao servidor.";
+        erroDiv.style.display = "block";
       }
     }
   </script>
-
 </body>
 </html>
