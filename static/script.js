@@ -76,7 +76,7 @@ async function efetuarLogout() {
   window.location.href = '/';
 }
 
-function mostrarPagina(paginaId, evt) {
+function mostrarPagina(paginaId) {
   if (usuarioSessao.nivel !== 'admin' && paginaId !== 'paginaUsuarios' && !usuarioSessao.modulos.includes(paginaId)) {
     alert("Você não possui permissão para acessar este módulo.");
     return;
@@ -131,7 +131,7 @@ async function carregarDashboard() {
   });
 }
 
-// PÁGINA DE LANÇAMENTO DE OS
+// LANÇAMENTO DE OS
 async function pesquisarFuncionariosOS(termo) {
   const ul = document.getElementById("listaSugestoesOS");
   if (!termo.trim()) {
@@ -222,7 +222,6 @@ document.getElementById("formLancamentoOS")?.addEventListener("submit", async (e
     document.getElementById("osHoras").value = "";
     funcionariosOSSelecionados = [];
     renderizarTagsFuncionariosOS();
-    carregarGrade();
   } else {
     alert(resultado.erro || "Erro ao efetuar lançamento.");
   }
@@ -334,13 +333,13 @@ function aplicarFiltrosGrade() {
 
         if (reg.situacao === 'Presente') {
           const calc = reg.calc;
-          const temExtra = calc.horas_50 > 0 || calc.horas_70 > 0 || calc.horas_100 > 0;
+          const temExtra = calc && (calc.horas_50 > 0 || calc.horas_70 > 0 || calc.horas_100 > 0);
           
           if (isSanada) {
             classeStatus = "st-presente-ok"; textoCel = `${reg.horas}h`;
           } else if (temExtra) {
             classeStatus = "st-extra"; textoCel = `${reg.horas}h*`;
-          } else if (calc.carga_padrao > 0 && reg.horas < calc.carga_padrao) {
+          } else if (calc && calc.carga_padrao > 0 && reg.horas < calc.carga_padrao) {
             classeStatus = "st-pendente"; textoCel = `${reg.horas}h`;
           } else {
             classeStatus = "st-presente-ok"; textoCel = `${reg.horas}h`;
@@ -369,6 +368,97 @@ function aplicarFiltrosGrade() {
     gridBody.innerHTML += linha;
   });
 }
+
+// MODAL DE LANÇAMENTO DIÁRIO
+async function abrirModal(fId, fNome, dataIso) {
+  funcionarioSelecionadoId = fId;
+  dataSelecionada = dataIso;
+  listaOSAtual = [];
+
+  document.getElementById("modalFuncionarioNome").innerText = fNome;
+  document.getElementById("modalDataTitulo").innerText = dataIso.split('-').reverse().join('/');
+
+  const res = await fetch(`/api/lancamento/detalhes?funcionario_id=${fId}&data=${dataIso}`);
+  const dados = await res.json();
+
+  document.getElementById("modalSituacao").value = dados.situacao || "Presente";
+  document.getElementById("modalObs").value = dados.observacao || "";
+  listaOSAtual = dados.apropriacoes || [];
+
+  alternarApropriacaoModal();
+  renderizarListaOSModal();
+
+  document.getElementById("modalLancamento").style.display = "block";
+}
+
+function fecharModal() {
+  document.getElementById("modalLancamento").style.display = "none";
+}
+
+function alternarApropriacaoModal() {
+  const sit = document.getElementById("modalSituacao").value;
+  const sec = document.getElementById("modalSecaoApropriacao");
+  sec.style.display = (sit === "Presente" || sit === "Deslocado") ? "block" : "none";
+}
+
+function adicionarOSModal() {
+  const osNum = document.getElementById("modalOS").value.trim();
+  const hrs = parseFloat(document.getElementById("modalHoras").value);
+
+  if (!osNum || isNaN(hrs) || hrs <= 0) {
+    alert("Informe o número da OS e a quantidade de horas válida.");
+    return;
+  }
+
+  listaOSAtual.push({ ordem_servico: osNum, horas: hrs });
+  document.getElementById("modalOS").value = "";
+  document.getElementById("modalHoras").value = "";
+  renderizarListaOSModal();
+}
+
+function removerOSModal(idx) {
+  listaOSAtual.splice(idx, 1);
+  renderizarListaOSModal();
+}
+
+function renderizarListaOSModal() {
+  const ul = document.getElementById("modalListaOS");
+  ul.innerHTML = "";
+
+  listaOSAtual.forEach((item, i) => {
+    ul.innerHTML += `
+      <li>
+        <span>OS: <b>${item.ordem_servico}</b> - ${item.horas}h</span>
+        <button type="button" class="btn-remove-os" onclick="removerOSModal(${i})">&times;</button>
+      </li>
+    `;
+  });
+}
+
+document.getElementById("formModal")?.addEventListener("submit", async (e) => {
+  e.preventDefault();
+
+  const payload = {
+    funcionario_id: funcionarioSelecionadoId,
+    data: dataSelecionada,
+    situacao: document.getElementById("modalSituacao").value,
+    observacao: document.getElementById("modalObs").value,
+    apropriacoes: listaOSAtual
+  };
+
+  const res = await fetch("/api/lancamento", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+
+  if (res.ok) {
+    fecharModal();
+    carregarGrade();
+  } else {
+    alert("Erro ao salvar lançamento diário.");
+  }
+});
 
 // 2. PAINEL DE PENDÊNCIAS
 async function carregarPendencias() {
@@ -439,8 +529,43 @@ async function sanarEsumir(fId, dataIso) {
     body: JSON.stringify({ funcionario_id: fId, data: dataIso })
   });
   carregarPendencias();
-  carregarGrade();
-  carregarDashboard();
+}
+
+// FICHA DO FUNCIONÁRIO
+async function abrirModalInfoFuncionario(fId) {
+  const res = await fetch(`/api/funcionarios/${fId}/detalhes`);
+  const data = await res.json();
+  const f = data.info;
+
+  let html = `
+    <div style="line-height:1.6;">
+      <p><b>Nome:</b> ${f.nome}</p>
+      <p><b>Matrícula:</b> ${f.matricula || '-'}</p>
+      <p><b>Cargo:</b> ${f.cargo || '-'}</p>
+      <p><b>Atuação:</b> ${f.atuacao || '-'}</p>
+      <p><b>Supervisor:</b> ${f.supervisor || '-'}</p>
+      <p><b>Início Atividades:</b> ${f.inicio_atividades ? f.inicio_atividades.split('-').reverse().join('/') : '-'}</p>
+      <hr style="margin: 10px 0; border:0; border-top:1px solid #e2e8f0;">
+      <h4>Histórico Recente de Lançamentos</h4>
+      <ul style="padding-left:18px; font-size:0.9rem;">
+  `;
+
+  if (data.historico.length === 0) {
+    html += `<li>Nenhum lançamento encontrado.</li>`;
+  } else {
+    data.historico.forEach(h => {
+      html += `<li><b>${h.data.split('-').reverse().join('/')}</b>: ${h.situacao} (${h.horas}h) ${h.observacao ? '- ' + h.observacao : ''}</li>`;
+    });
+  }
+
+  html += `</ul></div>`;
+
+  document.getElementById("infoFuncionarioBody").innerHTML = html;
+  document.getElementById("modalInfoFuncionario").style.display = "block";
+}
+
+function fecharModalInfoFuncionario() {
+  document.getElementById("modalInfoFuncionario").style.display = "none";
 }
 
 // 3. QUADRO DE TAREFAS
@@ -508,7 +633,7 @@ function fecharModalTarefa() { document.getElementById('modalTarefa').style.disp
 
 async function salvarTarefa(e) {
   e.preventDefault();
-  const dados = {
+  const payload = {
     titulo: document.getElementById('tarTitulo').value,
     descricao: document.getElementById('tarDescricao').value,
     responsavel: document.getElementById('tarResponsavel').value,
@@ -518,181 +643,22 @@ async function salvarTarefa(e) {
   await fetch('/api/tarefas', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(dados)
+    body: JSON.stringify(payload)
   });
 
-  document.getElementById('formTarefa').reset();
   fecharModalTarefa();
+  document.getElementById('formTarefa').reset();
   carregarTarefas();
 }
 
 async function excluirTarefa(id) {
-  if (!confirm("Deseja realmente excluir esta tarefa?")) return;
-  await fetch(`/api/tarefas?id=${id}`, { method: 'DELETE' });
-  carregarTarefas();
-}
-
-// 4. MODAL DE LANÇAMENTO E OS
-async function abrirModal(fId, fNome, dataIso) {
-  funcionarioSelecionadoId = fId;
-  dataSelecionada = dataIso;
-  listaOSAtual = [];
-
-  document.getElementById("modalDataTitulo").innerText = dataIso.split("-").reverse().join("/");
-  document.getElementById("modalFuncionarioNome").innerText = fNome;
-
-  const res = await fetch(`/api/lancamento/detalhes?funcionario_id=${fId}&data=${dataIso}`);
-  const dadosExistentes = await res.json();
-
-  document.getElementById("modalSituacao").value = dadosExistentes.situacao || "Presente";
-  document.getElementById("modalObs").value = dadosExistentes.observacao || "";
-  listaOSAtual = dadosExistentes.apropriacoes || [];
-
-  alternarApropriacaoModal();
-  renderizarListaOS();
-  
-  document.getElementById("modalLancamento").style.display = "block";
-}
-
-function fecharModal() {
-  document.getElementById("modalLancamento").style.display = "none";
-}
-
-function alternarApropriacaoModal() {
-  const sit = document.getElementById("modalSituacao").value;
-  document.getElementById("modalSecaoApropriacao").style.display = (sit === "Presente" || sit === "Deslocado") ? "block" : "none";
-}
-
-function adicionarOSModal() {
-  const os = document.getElementById("modalOS").value.trim();
-  const h = parseFloat(document.getElementById("modalHoras").value);
-
-  if (!os || !h || h <= 0) return alert("Preencha a OS e as horas corretamente.");
-
-  listaOSAtual.push({ ordem_servico: os, horas: h });
-  document.getElementById("modalOS").value = "";
-  document.getElementById("modalHoras").value = "";
-  renderizarListaOS();
-}
-
-function removerOSModal(index) {
-  listaOSAtual.splice(index, 1);
-  renderizarListaOS();
-}
-
-function renderizarListaOS() {
-  const ul = document.getElementById("modalListaOS");
-  ul.innerHTML = "";
-  
-  if (listaOSAtual.length === 0) {
-    ul.innerHTML = `<li style="color:#888; font-style:italic; padding: 4px;">Nenhuma OS adicionada.</li>`;
-    return;
+  if (confirm("Deseja realmente excluir esta tarefa?")) {
+    await fetch(`/api/tarefas?id=${id}`, { method: 'DELETE' });
+    carregarTarefas();
   }
-
-  listaOSAtual.forEach((item, idx) => {
-    ul.innerHTML += `
-      <li>
-        <span><b>OS:</b> ${item.ordem_servico} - <b>${item.horas}h</b></span>
-        <button type="button" class="btn-remove-os" onclick="removerOSModal(${idx})">Excluir</button>
-      </li>
-    `;
-  });
 }
 
-document.getElementById("formModal")?.addEventListener("submit", async (e) => {
-  e.preventDefault();
-
-  const dados = {
-    data: dataSelecionada,
-    funcionario_id: funcionarioSelecionadoId,
-    situacao: document.getElementById("modalSituacao").value,
-    observacao: document.getElementById("modalObs").value,
-    apropriacoes: listaOSAtual
-  };
-
-  const res = await fetch("/api/lancamento", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(dados)
-  });
-
-  if (res.ok) {
-    fecharModal();
-    carregarGrade();
-    carregarDashboard();
-  }
-});
-
-// 5. FICHA DO FUNCIONÁRIO
-async function abrirModalInfoFuncionario(id) {
-  const res = await fetch(`/api/funcionarios/${id}/detalhes`);
-  const data = await res.json();
-
-  if (!res.ok) {
-    alert("Erro ao buscar dados do funcionário.");
-    return;
-  }
-
-  const f = data.info;
-  const hist = data.historico;
-
-  const dataInicioBr = f.inicio_atividades ? f.inicio_atividades.split('-').reverse().join('/') : 'Não informado';
-
-  let html = `
-    <div class="info-card">
-      <h4>${f.nome}</h4>
-      <p><b>Matrícula:</b> ${f.matricula || '-'}</p>
-      <p><b>Cargo:</b> ${f.cargo}</p>
-      <p><b>Área/Atuação:</b> ${f.atuacao}</p>
-      <p><b>Início das Atividades em Área:</b> <span class="highlight-date">${dataInicioBr}</span></p>
-      <p><b>Supervisor:</b> ${f.supervisor || '-'}</p>
-    </div>
-
-    <h4 style="margin-top: 15px; margin-bottom: 8px;">Histórico Recente de Lançamentos</h4>
-    <div style="max-height: 200px; overflow-y: auto; border: 1px solid #e2e8f0; border-radius: 4px;">
-      <table class="grid-table">
-        <thead>
-          <tr>
-            <th>Data</th>
-            <th>Situação</th>
-            <th>Horas</th>
-            <th>Observação</th>
-          </tr>
-        </thead>
-        <tbody>
-  `;
-
-  if (hist.length === 0) {
-    html += `<tr><td colspan="4" style="padding:10px; color:#64748b;">Nenhum histórico registrado.</td></tr>`;
-  } else {
-    hist.forEach(h => {
-      const dtBr = h.data.split('-').reverse().join('/');
-      html += `
-        <tr>
-          <td>${dtBr}</td>
-          <td>${h.situacao}</td>
-          <td>${h.horas}h</td>
-          <td>${h.observacao || '-'}</td>
-        </tr>
-      `;
-    });
-  }
-
-  html += `
-        </tbody>
-      </table>
-    </div>
-  `;
-
-  document.getElementById("infoFuncionarioBody").innerHTML = html;
-  document.getElementById("modalInfoFuncionario").style.display = "block";
-}
-
-function fecharModalInfoFuncionario() {
-  document.getElementById("modalInfoFuncionario").style.display = "none";
-}
-
-// 6. CADASTRO DE FUNCIONÁRIOS
+// 4. CADASTROS DE FUNCIONÁRIOS
 async function carregarListaCadastro() {
   const res = await fetch('/api/funcionarios');
   listaFuncionariosCache = await res.json();
@@ -700,96 +666,87 @@ async function carregarListaCadastro() {
   const selectArea = document.getElementById("filtroCadastroArea");
   if (selectArea) {
     const areas = [...new Set(listaFuncionariosCache.map(f => f.atuacao).filter(Boolean))];
-    const valAtual = selectArea.value;
     selectArea.innerHTML = `<option value="">Todas as Áreas de Atuação</option>`;
-    areas.forEach(a => {
-      selectArea.innerHTML += `<option value="${a}" ${a === valAtual ? 'selected' : ''}>${a}</option>`;
-    });
+    areas.forEach(a => selectArea.innerHTML += `<option value="${a}">${a}</option>`);
   }
 
   filtrarTabelaCadastros();
 }
 
-function renderizarTabelaCadastros(lista) {
-  const tbody = document.getElementById('tabelaFuncionariosCadastrados');
-  if (!tbody) return;
+function filtrarTabelaCadastros() {
+  const termo = document.getElementById("inputPesquisaFuncionario") ? document.getElementById("inputPesquisaFuncionario").value.toLowerCase().trim() : "";
+  const area = document.getElementById("filtroCadastroArea") ? document.getElementById("filtroCadastroArea").value : "";
+  const tbody = document.getElementById("tabelaFuncionariosCadastrados");
   tbody.innerHTML = "";
 
-  if (lista.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="7" style="padding: 12px; color: #64748b;">Nenhum funcionário encontrado.</td></tr>`;
-    return;
-  }
+  const filtrados = listaFuncionariosCache.filter(f => {
+    const batNomeMatCargo = !termo || f.nome.toLowerCase().includes(termo) || (f.matricula && f.matricula.toLowerCase().includes(termo)) || (f.cargo && f.cargo.toLowerCase().includes(termo));
+    const batArea = !area || f.atuacao === area;
+    return batNomeMatCargo && batArea;
+  });
 
-  lista.forEach(f => {
-    const dataInicioBr = f.inicio_atividades ? f.inicio_atividades.split('-').reverse().join('/') : '-';
+  filtrados.forEach(f => {
     tbody.innerHTML += `
       <tr>
         <td>${f.matricula || '-'}</td>
-        <td><a href="#" onclick="abrirModalInfoFuncionario(${f.id}); return false;"><b>${f.nome}</b></a></td>
-        <td>${f.cargo}</td>
-        <td>${f.atuacao}</td>
-        <td>${dataInicioBr}</td>
+        <td><b>${f.nome}</b></td>
+        <td>${f.cargo || '-'}</td>
+        <td>${f.atuacao || '-'}</td>
+        <td>${f.inicio_atividades ? f.inicio_atividades.split('-').reverse().join('/') : '-'}</td>
         <td>${f.supervisor || '-'}</td>
         <td>
-          <button class="btn-secondary" onclick="prepararEdicao(${f.id})">Editar</button>
-          <button class="btn-danger" onclick="excluirFuncionario(${f.id}, '${f.nome}')">Excluir</button>
+          <button class="btn-secondary" onclick="editarFuncionario(${f.id})">Editar</button>
+          <button class="btn-remove-os" onclick="excluirFuncionario(${f.id})">Excluir</button>
         </td>
       </tr>
     `;
   });
 }
 
-function filtrarTabelaCadastros() {
-  const termo = document.getElementById("inputPesquisaFuncionario").value.toLowerCase().trim();
-  const areaFiltro = document.getElementById("filtroCadastroArea").value;
-  
-  const filtrados = listaFuncionariosCache.filter(f => {
-    const atendeTermo = !termo || (
-      (f.nome && f.nome.toLowerCase().includes(termo)) ||
-      (f.matricula && f.matricula.toLowerCase().includes(termo)) ||
-      (f.cargo && f.cargo.toLowerCase().includes(termo)) ||
-      (f.supervisor && f.supervisor.toLowerCase().includes(termo))
-    );
-    const atendeArea = !areaFiltro || f.atuacao === areaFiltro;
-    return atendeTermo && atendeArea;
+document.getElementById("formCadastro")?.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const id = document.getElementById("cadId").value;
+  const payload = {
+    id: id ? parseInt(id) : null,
+    matricula: document.getElementById("cadMatricula").value,
+    nome: document.getElementById("cadNome").value,
+    cargo: document.getElementById("cadCargo").value,
+    atuacao: document.getElementById("cadAtuacao").value,
+    inicio_atividades: document.getElementById("cadInicioAtividades").value,
+    supervisor: document.getElementById("cadSupervisor").value
+  };
+
+  const method = id ? "PUT" : "POST";
+  const res = await fetch("/api/funcionarios", {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
   });
 
-  renderizarTabelaCadastros(filtrados);
-}
-
-async function excluirFuncionario(id, nome) {
-  if (!confirm(`Tem certeza que deseja excluir o colaborador "${nome}"? Todos os históricos de presenças e apropriações dele também serão removidos.`)) return;
-
-  const res = await fetch(`/api/funcionarios?id=${id}`, { method: 'DELETE' });
-  const data = await res.json();
-
+  const resJson = await res.json();
   if (res.ok) {
-    alert(data.mensagem);
+    limparFormularioCadastro();
     carregarListaCadastro();
-    carregarGrade();
-    carregarDashboard();
   } else {
-    alert(data.erro || "Erro ao excluir funcionário.");
+    alert(resJson.erro || "Erro ao salvar funcionário.");
   }
-}
+});
 
-function prepararEdicao(id) {
-  const func = listaFuncionariosCache.find(f => f.id === id);
-  if (!func) return;
+function editarFuncionario(id) {
+  const f = listaFuncionariosCache.find(item => item.id === id);
+  if (!f) return;
 
-  document.getElementById("cadId").value = func.id;
-  document.getElementById("cadMatricula").value = func.matricula || "";
-  document.getElementById("cadNome").value = func.nome;
-  document.getElementById("cadCargo").value = func.cargo;
-  document.getElementById("cadAtuacao").value = func.atuacao;
-  document.getElementById("cadInicioAtividades").value = func.inicio_atividades || "";
-  document.getElementById("cadSupervisor").value = func.supervisor || "";
+  document.getElementById("cadId").value = f.id;
+  document.getElementById("cadMatricula").value = f.matricula || "";
+  document.getElementById("cadNome").value = f.nome || "";
+  document.getElementById("cadCargo").value = f.cargo || "";
+  document.getElementById("cadAtuacao").value = f.atuacao || "";
+  document.getElementById("cadInicioAtividades").value = f.inicio_atividades || "";
+  document.getElementById("cadSupervisor").value = f.supervisor || "";
 
   document.getElementById("tituloFormCadastro").innerText = "Editar Funcionário";
-  document.getElementById("btnSalvarCad").innerText = "Atualizar Cadastro";
+  document.getElementById("btnSalvarCad").innerText = "Atualizar Funcionário";
   document.getElementById("btnCancelarEdit").style.display = "inline-block";
-
-  window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
 function limparFormularioCadastro() {
@@ -800,132 +757,75 @@ function limparFormularioCadastro() {
   document.getElementById("btnCancelarEdit").style.display = "none";
 }
 
-document.getElementById("formCadastro")?.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  
-  const id = document.getElementById("cadId").value;
-  const dados = {
-    id: id ? parseInt(id) : null,
-    matricula: document.getElementById("cadMatricula").value,
-    nome: document.getElementById("cadNome").value,
-    cargo: document.getElementById("cadCargo").value,
-    atuacao: document.getElementById("cadAtuacao").value,
-    inicio_atividades: document.getElementById("cadInicioAtividades").value,
-    supervisor: document.getElementById("cadSupervisor").value
-  };
-
-  const metodo = id ? 'PUT' : 'POST';
-  const res = await fetch("/api/funcionarios", {
-    method: metodo,
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(dados)
-  });
-
-  const resultado = await res.json();
-
-  if (res.ok) {
-    alert(id ? "Funcionário atualizado!" : "Funcionário cadastrado!");
-    limparFormularioCadastro();
+async function excluirFuncionario(id) {
+  if (confirm("Tem certeza que deseja excluir este funcionário?")) {
+    await fetch(`/api/funcionarios?id=${id}`, { method: "DELETE" });
     carregarListaCadastro();
-    carregarGrade();
-  } else {
-    alert(resultado.erro || "Erro ao salvar.");
   }
-});
-
-// 7. GESTÃO DE USUÁRIOS (ADMIN EXCLUSIVO)
-
-function alternarCheckboxModulos() {
-  const nivel = document.getElementById("usrNivel").value;
-  const grupo = document.getElementById("grupoModulosAcc");
-  grupo.style.display = (nivel === "admin") ? "none" : "block";
 }
 
+// 5. GESTÃO DE USUÁRIOS
 async function carregarUsuarios() {
   const res = await fetch('/api/usuarios');
+  if (!res.ok) return;
   const lista = await res.json();
-
   const tbody = document.getElementById("tabelaUsuariosCadastrados");
   tbody.innerHTML = "";
 
-  if (lista.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="5" style="padding:10px;">Nenhum usuário cadastrado.</td></tr>`;
-    return;
-  }
-
-  const mapaNomesModulos = {
-    'paginaDashboard': 'Dashboard Analytics',
-    'paginaOS': 'Lançamento OS',
-    'paginaGrade': 'Grade Presença',
-    'paginaPendencias': 'Pendências',
-    'paginaTarefas': 'Quadro Tarefas',
-    'paginaCadastro': 'Cadastros'
-  };
-
   lista.forEach(u => {
-    let modulosTexto = "Todos (Admin)";
-    if (u.nivel === 'comum') {
-      const mods = u.modulos || [];
-      modulosTexto = mods.map(m => mapaNomesModulos[m] || m).join(", ") || "Nenhum";
-    }
-
     tbody.innerHTML += `
       <tr>
         <td><b>${u.nome}</b></td>
         <td>${u.email}</td>
-        <td><span class="badge-info">${u.nivel.toUpperCase()}</span></td>
-        <td>${modulosTexto}</td>
+        <td><span class="badge-extra">${u.nivel.toUpperCase()}</span></td>
+        <td>${u.nivel === 'admin' ? '<i>Acesso Total</i>' : (u.modulos || []).join(', ')}</td>
         <td>
-          <button class="btn-danger" onclick="excluirUsuario(${u.id}, '${u.nome}')">Excluir</button>
+          <button class="btn-remove-os" onclick="excluirUsuario(${u.id})">Excluir</button>
         </td>
       </tr>
     `;
   });
 }
 
+function alternarCheckboxModulos() {
+  const nivel = document.getElementById("usrNivel").value;
+  const grupo = document.getElementById("grupoModulosAcc");
+  grupo.style.display = nivel === 'admin' ? 'none' : 'block';
+}
+
 document.getElementById("formUsuario")?.addEventListener("submit", async (e) => {
   e.preventDefault();
+  const checkboxes = document.querySelectorAll('input[name="usrModulos"]:checked');
+  const modulos = Array.from(checkboxes).map(cb => cb.value);
 
-  const modulosSel = [];
-  document.querySelectorAll('input[name="usrModulos"]:checked').forEach(cb => {
-    modulosSel.push(cb.value);
-  });
-
-  const dados = {
+  const payload = {
     nome: document.getElementById("usrNome").value,
     email: document.getElementById("usrEmail").value,
     senha: document.getElementById("usrSenha").value,
     nivel: document.getElementById("usrNivel").value,
-    modulos: modulosSel
+    modulos
   };
 
   const res = await fetch("/api/usuarios", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(dados)
+    body: JSON.stringify(payload)
   });
 
-  const resultado = await res.json();
-
+  const resJson = await res.json();
   if (res.ok) {
-    alert(resultado.mensagem);
     document.getElementById("formUsuario").reset();
     carregarUsuarios();
   } else {
-    alert(resultado.erro || "Erro ao criar usuário.");
+    alert(resJson.erro || "Erro ao cadastrar usuário.");
   }
 });
 
-async function excluirUsuario(id, nome) {
-  if (!confirm(`Deseja remover o acesso do usuário "${nome}"?`)) return;
-
-  const res = await fetch(`/api/usuarios?id=${id}`, { method: 'DELETE' });
-  const data = await res.json();
-
-  if (res.ok) {
-    alert(data.mensagem);
-    carregarUsuarios();
-  } else {
-    alert(data.erro || "Erro ao excluir.");
+async function excluirUsuario(id) {
+  if (confirm("Deseja remover este usuário?")) {
+    const res = await fetch(`/api/usuarios?id=${id}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (res.ok) carregarUsuarios();
+    else alert(data.erro);
   }
 }

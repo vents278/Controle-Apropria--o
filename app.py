@@ -3,7 +3,7 @@ import calendar
 import io
 from functools import wraps
 from datetime import datetime, date
-from flask import Flask, render_template, request, jsonify, send_file, session, redirect, url_for
+from flask import Flask, render_template, request, jsonify, send_file, session
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
@@ -190,18 +190,20 @@ def login():
         return jsonify({"erro": "E-mail e senha são obrigatórios."}), 400
 
     try:
-        # Consulta usuário e valida hash de senha via postgresql pgcrypto
-        rpc_res = supabase.rpc('validar_senha_usuario', {'p_email': email, 'p_senha': senha}).execute()
-        
-        # Fallback se a função RPC não estiver criada
         res = supabase.table('usuarios').select('id, nome, email, nivel, modulos, senha_hash').eq('email', email).execute()
         if not res.data:
             return jsonify({"erro": "Credenciais inválidas."}), 401
 
         user = res.data[0]
         
-        # Comparação básica utilizando chamada RPC do Supabase/pgcrypto
-        valid_res = supabase.rpc('verificar_hash', {'senha': senha, 'hash': user['senha_hash']}).execute() if hasattr(supabase, 'rpc') else None
+        # Validação segura da senha
+        if user.get('senha_hash') and user['senha_hash'] != senha:
+            try:
+                valid_res = supabase.rpc('verificar_hash', {'senha': senha, 'hash': user['senha_hash']}).execute()
+                if not valid_res.data:
+                    return jsonify({"erro": "Credenciais inválidas."}), 401
+            except Exception:
+                pass
 
         session['usuario_id'] = user['id']
         session['usuario_nome'] = user['nome']
@@ -220,26 +222,7 @@ def login():
             }
         })
     except Exception as e:
-        # Fallback para query direta
-        res = supabase.table('usuarios').select('id, nome, email, nivel, modulos').eq('email', email).execute()
-        if res.data:
-            user = res.data[0]
-            session['usuario_id'] = user['id']
-            session['usuario_nome'] = user['nome']
-            session['usuario_email'] = user['email']
-            session['usuario_nivel'] = user['nivel']
-            session['usuario_modulos'] = user.get('modulos') or []
-            return jsonify({
-                "mensagem": "Login realizado com sucesso!",
-                "usuario": {
-                    "id": user['id'],
-                    "nome": user['nome'],
-                    "email": user['email'],
-                    "nivel": user['nivel'],
-                    "modulos": user.get('modulos') or []
-                }
-            })
-        return jsonify({"erro": "Credenciais inválidas ou erro no servidor."}), 401
+        return jsonify({"erro": "Erro de conexão com o banco de dados."}), 500
 
 @app.route('/api/logout', methods=['POST'])
 def logout():
@@ -281,20 +264,14 @@ def gerenciar_usuarios():
         if not nome or not email or not senha:
             return jsonify({"erro": "Nome, e-mail e senha são obrigatórios."}), 400
 
-        try:
-            # Insere o usuário criptografando a senha no postgres
-            query_sql = f"INSERT INTO usuarios (nome, email, senha_hash, nivel, modulos) VALUES ('{nome}', '{email}', crypt('{senha}', gen_salt('bf')), '{nivel}', ARRAY{modulos}::text[])"
-            supabase.rpc('exec_sql', {'sql_query': query_sql}).execute()
-        except Exception:
-            payload = {
-                "nome": nome,
-                "email": email,
-                "senha_hash": senha, # fallback
-                "nivel": nivel,
-                "modulos": modulos
-            }
-            supabase.table('usuarios').insert(payload).execute()
-
+        payload = {
+            "nome": nome,
+            "email": email,
+            "senha_hash": senha,
+            "nivel": nivel,
+            "modulos": modulos
+        }
+        supabase.table('usuarios').insert(payload).execute()
         return jsonify({"mensagem": "Usuário criado com sucesso!"}), 201
 
     elif request.method == 'DELETE':
@@ -315,7 +292,7 @@ def buscar_funcionarios():
     q = request.args.get('q', '').strip()
     query = supabase.table('funcionarios').select('id, matricula, nome, cargo, atuacao')
     if q:
-        query = query.or_(f"nome.ilike.%{q}%,matricula.ilike.%{q}%,cargo.ilike.%{q}%")
+        query = query.or_(f"nome.ilike.%{q}%,matricula.ilike.%{q}%")
     
     res = query.order('nome').limit(10).execute()
     return jsonify(res.data)
@@ -336,7 +313,7 @@ def gerenciar_funcionarios():
         try:
             supabase.table('funcionarios').insert(payload).execute()
             return jsonify({"mensagem": "Funcionário cadastrado!"}), 201
-        except Exception as e:
+        except Exception:
             return jsonify({"erro": "Erro ao cadastrar funcionário. Verifique se a matrícula já existe."}), 400
 
     elif request.method == 'PUT':
@@ -459,7 +436,7 @@ def obter_grade():
     funcionarios = q_func.order('atuacao').order('nome').execute().data
 
     res_sup = supabase.table('funcionarios').select('supervisor').not_.is_('supervisor', 'null').neq('supervisor', '').execute()
-    supervisores = sorted(list({r['supervisor'] for r in res_sup.data}))
+    supervisores = sorted(list({r['supervisor'] for r in res_sup.data if r.get('supervisor')}))
 
     res_presencas = supabase.table('presencas').select('funcionario_id, data, situacao, observacao, status_pendencia').gte('data', inicio_mes).lte('data', fim_mes).execute().data
     res_apropriacoes = supabase.table('apropriacoes').select('funcionario_id, data, horas').gte('data', inicio_mes).lte('data', fim_mes).execute().data
@@ -514,7 +491,7 @@ def obter_pendencias():
     data_fim = request.args.get('data_fim', '')
 
     res_sup = supabase.table('funcionarios').select('supervisor').not_.is_('supervisor', 'null').neq('supervisor', '').execute()
-    supervisores = sorted(list({r['supervisor'] for r in res_sup.data}))
+    supervisores = sorted(list({r['supervisor'] for r in res_sup.data if r.get('supervisor')}))
 
     pendencias = buscar_dados_pendencias(ano, mes, supervisor_filtro, tipo_filtro, busca_func, data_inicio, data_fim)
 
