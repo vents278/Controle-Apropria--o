@@ -3,35 +3,40 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ERP - Gestão Integrada de Presença e Operação</title>
+  <title>ERP Professional - Gestão Integrada</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
 
-  <!-- BOTÃO HAMBÚRGUER E TOPBAR MOBILE -->
-  <header class="topbar">
-    <button class="toggle-sidebar-btn" onclick="toggleSidebar()">☰</button>
-    <div class="logo"><strong>ERP</strong> Gestão de Horas e Presença</div>
-    <div class="user-info">
-      <span id="nomeUsuarioLogado">👤 Carregando...</span>
-      <button onclick="abrirModalSenha()" class="btn-secondary-sm">Senha</button>
-      <button onclick="efetuarLogout()" class="btn-logout">Sair</button>
-    </div>
-  </header>
+  <!-- Botão para Menu Mobile -->
+  <button class="mobile-toggle-btn" onclick="toggleSidebar()">☰ Menu</button>
 
-  <div class="app-container">
-    <!-- MENU LATERAL RESPONSIVO -->
-    <aside id="sidebar" class="sidebar">
-      <nav id="navbar" class="nav-menu">
+  <div class="app-layout">
+    <!-- Menu de Seleção de Páginas Lateral -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-brand">
+        <strong>ERP LOGÍSTICA</strong>
+        <small>Módulo Operacional</small>
+      </div>
+
+      <nav class="sidebar-nav">
         <button id="btn-paginaDashboard" class="nav-btn active" onclick="mostrarPagina('paginaDashboard')">📊 Dashboard</button>
-        <button id="btn-paginaOS" class="nav-btn" onclick="mostrarPagina('paginaOS')">📝 Lançamento OS</button>
-        <button id="btn-paginaGrade" class="nav-btn" onclick="mostrarPagina('paginaGrade')">📅 Grade Presença</button>
-        <button id="btn-paginaAtendimentos" class="nav-btn" onclick="mostrarPagina('paginaAtendimentos')">🛠️ Atendimentos Fixos</button>
-        <button id="btn-paginaPendencias" class="nav-btn" onclick="mostrarPagina('paginaPendencias')">⚠️ Pendências / HE</button>
-        <button id="btn-paginaTarefas" class="nav-btn" onclick="mostrarPagina('paginaTarefas')">📋 Quadro Tarefas</button>
+        <button id="btn-paginaAtendimentos" class="nav-btn" onclick="mostrarPagina('paginaAtendimentos')">📌 Atendimentos Fixos</button>
+        <button id="btn-paginaOS" class="nav-btn" onclick="mostrarPagina('paginaOS')">📝 Lançamento de OS</button>
+        <button id="btn-paginaGrade" class="nav-btn" onclick="mostrarPagina('paginaGrade')">🗓️ Grade de Presença</button>
+        <button id="btn-paginaPendencias" class="nav-btn" onclick="mostrarPagina('paginaPendencias')">⚠️ Pendências & HE</button>
+        <button id="btn-paginaTarefas" class="nav-btn" onclick="mostrarPagina('paginaTarefas')">📋 Quadro de Tarefas</button>
         <button id="btn-paginaCadastro" class="nav-btn" onclick="mostrarPagina('paginaCadastro')">👥 Cadastros</button>
-        <button id="btn-paginaUsuarios" class="nav-btn admin-only" onclick="mostrarPagina('paginaUsuarios')">⚙️ Usuários</button>
+        <button id="btn-paginaUsuarios" class="nav-btn admin-only" onclick="mostrarPagina('paginaUsuarios')">🔐 Usuários</button>
       </nav>
+
+      <div class="sidebar-user">
+        <span id="nomeUsuarioLogado">👤 Carregando...</span>
+        <div class="user-actions">
+          <button onclick="abrirModalTrocaSenha()" class="btn-troca-senha">Alterar Senha</button>
+          <button onclick="efetuarLogout()" class="btn-logout">Sair</button>
+        </div>
+      </div>
     </aside>
 
     <main class="main-content">
@@ -107,6 +112,42 @@
         </div>
       </section>
 
+      <!-- ATENDIMENTOS FIXOS (NOVAS ABAS E CALENDÁRIO VERTICAL) -->
+      <section id="paginaAtendimentos" class="page">
+        <div class="filter-bar">
+          <h2>Gestão de Atendimentos Fixos</h2>
+          <div class="filter-controls">
+            <div class="filter-group">
+              <label>Mês/Ano:</label>
+              <input type="month" id="filtroAtendimentosMes" onchange="carregarAtendimentosFixos()">
+            </div>
+          </div>
+        </div>
+
+        <!-- Abas Solicitadas -->
+        <div class="tab-container">
+          <button class="tab-btn active" onclick="trocarAbaAtendimento('FACILITIES', this)">1. ATENDIMENTO FACILITIES</button>
+          <button class="tab-btn" onclick="trocarAbaAtendimento('LOGISTICA', this)">2. ATENDIMENTO LOGÍSTICA</button>
+          <button class="tab-btn" onclick="trocarAbaAtendimento('OPERACAO', this)">3. ATENDIMENTO OPERAÇÃO</button>
+          <button class="tab-btn" onclick="trocarAbaAtendimento('ELETRICA', this)">4. ATENDIMENTO A ELÉTRICA</button>
+          <button class="tab-btn" onclick="trocarAbaAtendimento('PATIO', this)">5. ATENDIMENTO AO PÁTIO</button>
+        </div>
+
+        <div class="vertical-calendar-wrapper">
+          <table class="grid-table vertical-table">
+            <thead>
+              <tr>
+                <th style="width: 120px;">Data</th>
+                <th style="width: 100px;">Dia Semana</th>
+                <th>Equipe Atendendo</th>
+                <th style="width: 120px;">Ação</th>
+              </tr>
+            </thead>
+            <tbody id="tabelaAtendimentosFixos"></tbody>
+          </table>
+        </div>
+      </section>
+
       <!-- LANÇAMENTO DE ORDEM DE SERVIÇO (OS) -->
       <section id="paginaOS" class="page">
         <h2>Lançamento de Ordem de Serviço (OS)</h2>
@@ -147,155 +188,117 @@
         </form>
       </section>
 
-      <!-- 1. GRADE MATRICIAL DE PRESENÇA COM BARRA DE ROLAGEM DEDICADA -->
+      <!-- 1. GRADE MATRICIAL RESPONSIVA E NOMES FIXOS -->
       <section id="paginaGrade" class="page">
         <div class="filter-bar">
           <h2>Matriz Diária de Presença e Apropriação</h2>
           <div class="filter-controls">
             <div class="filter-group">
-              <label>Mês/Ano:</label>
-              <input type="month" id="filtroMesAno" onchange="carregarGrade()">
+              <label>Buscar:</label>
+              <input type="text" id="filtroGradeBusca" placeholder="🔍 Nome, Matrícula..." onkeyup="aplicarFiltrosGrade()">
             </div>
             <div class="filter-group">
-              <label>Supervisor:</label>
-              <select id="filtroSupervisor" onchange="carregarGrade()"></select>
-            </div>
-            <div class="filter-group">
-              <label>Área:</label>
-              <select id="filtroArea" onchange="aplicarFiltrosGrade()"></select>
+              <label>Área / Atuação:</label>
+              <select id="filtroArea" onchange="aplicarFiltrosGrade()">
+                <option value="">Todas as Áreas</option>
+              </select>
             </div>
             <div class="filter-group">
               <label>Situação:</label>
               <select id="filtroGradeSituacao" onchange="aplicarFiltrosGrade()">
                 <option value="">Todas as Situações</option>
-                <option value="Presente">Presente (100% Ok)</option>
-                <option value="COM_EXTRA">Com Horas Extras</option>
-                <option value="INCOMPLETO">Jornada Incompleta</option>
+                <option value="Presente">Presente</option>
                 <option value="Deslocado">Deslocado</option>
                 <option value="Falta">Falta</option>
                 <option value="Folga">Folga</option>
                 <option value="Treinamento">Treinamento</option>
+                <option value="COM_EXTRA">Com Horas Extras</option>
+                <option value="INCOMPLETO">Jornada Incompleta</option>
               </select>
             </div>
             <div class="filter-group">
-              <input type="text" id="filtroGradeBusca" placeholder="🔍 Nome ou Matrícula..." onkeyup="aplicarFiltrosGrade()">
+              <label>Supervisor:</label>
+              <select id="filtroSupervisor" onchange="carregarGrade()">
+                <option value="">Todos os Supervisores</option>
+              </select>
+            </div>
+            <div class="filter-group">
+              <label>Mês/Ano:</label>
+              <input type="month" id="filtroMesAno" onchange="carregarGrade()">
             </div>
           </div>
         </div>
 
-        <!-- CONTROLES DE ROLAGEM HORIZONTAL FIXA -->
-        <div class="grid-scroll-controls">
-          <button class="btn-secondary-sm" onclick="rolarGradeHorizontal(-300)">◀ Rolagem Esquerda</button>
-          <span class="scroll-tip">💡 Você também pode rolar na barra superior ou arrastar a grade lateralmente</span>
-          <button class="btn-secondary-sm" onclick="rolarGradeHorizontal(300)">Rolagem Direita ▶</button>
-        </div>
-
-        <!-- BARRA DE ROLAGEM HORIZONTAL SUPERIOR -->
-        <div class="top-scrollbar-wrapper" id="topScrollWrapper" onscroll="sincronizarScrollGrade('top')">
-          <div class="top-scrollbar-inner" id="topScrollInner"></div>
-        </div>
-
-        <!-- TABELA MATRICIAL -->
-        <div class="table-scroll-wrapper" id="gradeScrollWrapper" onscroll="sincronizarScrollGrade('grid')">
+        <div class="table-scroll-wrapper scrollable-grid">
           <table class="grid-table">
             <thead>
-              <tr id="gridHeader"></tr>
+              <tr id="gridHeader">
+                <th class="col-fixed">Funcionário</th>
+                <th class="col-fixed col-cargo">Cargo</th>
+                <th class="col-fixed col-atuacao">Atuação</th>
+              </tr>
             </thead>
             <tbody id="gridBody"></tbody>
           </table>
         </div>
       </section>
 
-      <!-- ATENDIMENTOS FIXOS (5 ABAS COM CALENDÁRIO VERTICAL) -->
-      <section id="paginaAtendimentos" class="page">
-        <div class="filter-bar">
-          <h2>Página de Atendimentos Fixos</h2>
-          <div class="filter-controls">
-            <div class="filter-group">
-              <label>Mês/Ano:</label>
-              <input type="month" id="filtroAtendimentoMes" onchange="carregarAtendimentosFixos()">
-            </div>
-          </div>
-        </div>
-
-        <div class="tabs-header">
-          <button class="tab-btn active" id="tab-FACILITIES" onclick="trocarAbaAtendimento('FACILITIES')">1. ATENDIMENTO FACILITIES</button>
-          <button class="tab-btn" id="tab-LOGISTICA" onclick="trocarAbaAtendimento('LOGISTICA')">2. ATENDIMENTO LOGISTICA</button>
-          <button class="tab-btn" id="tab-OPERACAO" onclick="trocarAbaAtendimento('OPERACAO')">3. ATENDIMENTO OPERAÇÃO</button>
-          <button class="tab-btn" id="tab-ELETRICA" onclick="trocarAbaAtendimento('ELETRICA')">4. ATENDIMENTO A ELETRICA</button>
-          <button class="tab-btn" id="tab-PATIO" onclick="trocarAbaAtendimento('PATIO')">5. ATENDIMENTO AO PATIO</button>
-        </div>
-
-        <div class="atendimento-vertical-container card-form" style="max-width: 900px; margin-top:15px;">
-          <h3 id="tituloAbaAtendimento" style="margin-bottom: 15px; color:#0f172a;">Calendário Vertical de Atendimentos</h3>
-          <div class="table-scroll-wrapper">
-            <table class="grid-table" style="text-align: left;">
-              <thead>
-                <tr>
-                  <th style="width: 130px;">Data</th>
-                  <th style="width: 100px;">Dia da Semana</th>
-                  <th>Funcionário Atendente</th>
-                  <th>Observação / Notas</th>
-                  <th style="width: 100px;">Ação</th>
-                </tr>
-              </thead>
-              <tbody id="tabelaAtendimentosFixos"></tbody>
-            </table>
-          </div>
-        </div>
-      </section>
-
-      <!-- 2. PAINEL DE PENDÊNCIAS & HORAS EXTRAS -->
+      <!-- 2. PAINEL DE PENDÊNCIAS -->
       <section id="paginaPendencias" class="page">
         <div class="filter-bar">
-          <h2>Painel de Pendências e Lançamento de Horas Extras</h2>
+          <h2>Gestão de Inconsistências e Sanagem</h2>
           <div class="filter-controls">
+            <div class="filter-group">
+              <label>Buscar Funcionário:</label>
+              <input type="text" id="filtroPendenciasFuncionario" placeholder="🔍 Nome ou Matrícula..." onkeyup="carregarPendencias()">
+            </div>
+            <div class="filter-group">
+              <label>Tipo de Pendência:</label>
+              <select id="filtroTipoPendencia" onchange="carregarPendencias()">
+                <option value="">Todos os Tipos</option>
+                <option value="50%">Hora Extra 50%</option>
+                <option value="70%">Hora Extra 70%</option>
+                <option value="100%">Hora Extra 100%</option>
+                <option value="DESLOCADO">Deslocado Sem OS</option>
+                <option value="INCOMPLETA">Jornada Incompleta</option>
+              </select>
+            </div>
+            <div class="filter-group">
+              <label>Supervisor:</label>
+              <select id="filtroPendenciasSupervisor" onchange="carregarPendencias()">
+                <option value="">Todos os Supervisores</option>
+              </select>
+            </div>
             <div class="filter-group">
               <label>Mês/Ano:</label>
               <input type="month" id="filtroPendenciasMes" onchange="carregarPendencias()">
             </div>
             <div class="filter-group">
-              <label>Supervisor:</label>
-              <select id="filtroPendenciasSupervisor" onchange="carregarPendencias()"></select>
-            </div>
-            <div class="filter-group">
-              <label>Tipo Pendência:</label>
-              <select id="filtroTipoPendencia" onchange="carregarPendencias()">
-                <option value="">Todas</option>
-                <option value="50%">HE 50% (Excedeu Jornada)</option>
-                <option value="70%">HE 70% (Sábados)</option>
-                <option value="100%">HE 100% (Domingos/Feriados)</option>
-                <option value="DESLOCADO">Deslocado s/ OS</option>
-                <option value="INCOMPLETA">Jornada Incompleta</option>
-              </select>
-            </div>
-            <div class="filter-group">
-              <label>De:</label>
+              <label>Data Início:</label>
               <input type="date" id="filtroPendenciasDataInicio" onchange="carregarPendencias()">
             </div>
             <div class="filter-group">
-              <label>Até:</label>
+              <label>Data Fim:</label>
               <input type="date" id="filtroPendenciasDataFim" onchange="carregarPendencias()">
             </div>
-            <div class="filter-group">
-              <input type="text" id="filtroPendenciasFuncionario" placeholder="🔍 Nome/Matrícula..." onkeyup="carregarPendencias()">
+            <div class="filter-group" style="align-self: flex-end;">
+              <button class="btn-excel" onclick="exportarPendenciasExcel()">📊 Exportar Excel</button>
             </div>
-            <button class="btn-excel" onclick="exportarPendenciasExcel()">📥 Exportar Excel</button>
           </div>
         </div>
 
-        <div class="table-scroll-wrapper">
+        <div class="table-scroll-wrapper" style="margin-top: 15px;">
           <table class="grid-table">
             <thead>
               <tr>
                 <th>Data</th>
                 <th>Funcionário</th>
                 <th>Supervisor</th>
-                <th>Horas Lançadas</th>
-                <th>Exigido</th>
-                <th>Adicional</th>
+                <th>Lançado</th>
+                <th>Jornada Exigida</th>
+                <th>Adicional / Extras</th>
                 <th>Status</th>
-                <th>Inconsistência / Motivo</th>
+                <th>Motivo / Ocorrência</th>
                 <th>Ação</th>
               </tr>
             </thead>
@@ -304,86 +307,74 @@
         </div>
       </section>
 
-      <!-- 3. QUADRO DE TAREFAS (KANBAN COM EDIÇÃO) -->
+      <!-- 3. QUADRO DE TAREFAS (KANBAN) -->
       <section id="paginaTarefas" class="page">
         <div class="filter-bar">
-          <h2>Quadro de Tarefas Operacionais</h2>
-          <button class="btn-primary" onclick="abrirModalNovaTarefa()">+ Nova Tarefa</button>
+          <h2>Quadro de Tarefas</h2>
+          <button class="btn-primary" onclick="abrirModalTarefa()">+ Nova Tarefa</button>
         </div>
 
         <div class="kanban-board">
           <div class="kanban-column" ondragover="allowDrop(event)" ondrop="drop(event, 'A Fazer')">
-            <div class="kanban-header column-todo">
-              <span>A Fazer</span>
-              <span id="cnt-todo" class="kanban-badge">0</span>
-            </div>
-            <div id="col-todo" class="kanban-cards"></div>
+            <div class="kanban-header column-todo">A Fazer <span id="cnt-todo" class="kanban-badge">0</span></div>
+            <div class="kanban-cards" id="col-todo"></div>
           </div>
 
           <div class="kanban-column" ondragover="allowDrop(event)" ondrop="drop(event, 'Em Andamento')">
-            <div class="kanban-header column-doing">
-              <span>Em Andamento</span>
-              <span id="cnt-doing" class="kanban-badge">0</span>
-            </div>
-            <div id="col-doing" class="kanban-cards"></div>
+            <div class="kanban-header column-doing">Em Andamento <span id="cnt-doing" class="kanban-badge">0</span></div>
+            <div class="kanban-cards" id="col-doing"></div>
           </div>
 
           <div class="kanban-column" ondragover="allowDrop(event)" ondrop="drop(event, 'Concluído')">
-            <div class="kanban-header column-done">
-              <span>Concluído</span>
-              <span id="cnt-done" class="kanban-badge">0</span>
-            </div>
-            <div id="col-done" class="kanban-cards"></div>
+            <div class="kanban-header column-done">Concluído <span id="cnt-done" class="kanban-badge">0</span></div>
+            <div class="kanban-cards" id="col-done"></div>
           </div>
         </div>
       </section>
 
-      <!-- 4. CADASTROS DE FUNCIONÁRIOS -->
+      <!-- 4. CADASTROS -->
       <section id="paginaCadastro" class="page">
-        <h2>Gestão de Funcionários</h2>
+        <h2 id="tituloFormCadastro">Cadastrar Novo Funcionário</h2>
+        <form id="formCadastro" class="card-form">
+          <input type="hidden" id="cadId">
+          <div class="form-group">
+            <label>Matrícula:</label>
+            <input type="text" id="cadMatricula" required placeholder="Ex: 041949">
+          </div>
+          <div class="form-group">
+            <label>Nome Completo:</label>
+            <input type="text" id="cadNome" required placeholder="Nome do funcionário">
+          </div>
+          <div class="form-group">
+            <label>Cargo:</label>
+            <input type="text" id="cadCargo" placeholder="Ex: Eletricista, Motorista">
+          </div>
+          <div class="form-group">
+            <label>Área de Atuação:</label>
+            <input type="text" id="cadAtuacao" placeholder="Ex: OPERAÇÃO, ELÉTRICA">
+          </div>
+          <div class="form-group">
+            <label>Supervisor:</label>
+            <input type="text" id="cadSupervisor" placeholder="Nome do supervisor direto">
+          </div>
+          <div class="form-group">
+            <label>Data de Início das Atividades:</label>
+            <input type="date" id="cadInicioAtividades">
+          </div>
 
-        <div class="card-form" style="max-width: 600px; margin-bottom: 25px;">
-          <h3 id="tituloFormCadastro" style="margin-bottom: 12px;">Cadastrar Novo Funcionário</h3>
-          <form id="formCadastro">
-            <input type="hidden" id="cadId">
-            <div class="form-group">
-              <label>Matrícula:</label>
-              <input type="text" id="cadMatricula" required placeholder="Ex: M1029">
-            </div>
-            <div class="form-group">
-              <label>Nome Completo:</label>
-              <input type="text" id="cadNome" required placeholder="Ex: João da Silva">
-            </div>
-            <div class="form-group">
-              <label>Cargo:</label>
-              <input type="text" id="cadCargo" required placeholder="Ex: Eletricista Senior">
-            </div>
-            <div class="form-group">
-              <label>Área de Atuação:</label>
-              <input type="text" id="cadAtuacao" required placeholder="Ex: ELÉTRICA / MANUTENÇÃO">
-            </div>
-            <div class="form-group">
-              <label>Início das Atividades:</label>
-              <input type="date" id="cadInicioAtividades">
-            </div>
-            <div class="form-group">
-              <label>Supervisor Responsável:</label>
-              <input type="text" id="cadSupervisor" placeholder="Ex: Carlos Andrade">
-            </div>
-            <div class="button-group">
-              <button type="submit" id="btnSalvarCad" class="btn-primary full-width">Salvar Funcionário</button>
-              <button type="button" id="btnCancelarEdit" class="btn-secondary" style="display:none;" onclick="limparFormularioCadastro()">Cancelar</button>
-            </div>
-          </form>
-        </div>
+          <div class="button-group">
+            <button type="submit" id="btnSalvarCad" class="btn-primary full-width">Salvar Funcionário</button>
+            <button type="button" id="btnCancelarEdit" class="btn-secondary" style="display:none;" onclick="limparFormularioCadastro()">Cancelar</button>
+          </div>
+        </form>
 
         <div class="section-header-cad">
-          <h3>Colaboradores Cadastrados</h3>
+          <h3>Funcionários Cadastrados</h3>
           <div class="filter-controls">
-            <select id="filtroCadastroArea" onchange="filtrarTabelaCadastros()"></select>
-            <div class="search-box">
-              <input type="text" id="inputPesquisaFuncionario" placeholder="🔍 Pesquisar por nome, matrícula..." onkeyup="filtrarTabelaCadastros()">
-            </div>
+            <input type="text" id="inputPesquisaFuncionario" placeholder="🔍 Pesquisar por nome ou matrícula..." onkeyup="filtrarTabelaCadastros()">
+            <select id="filtroCadastroArea" onchange="filtrarTabelaCadastros()">
+              <option value="">Todas as Áreas</option>
+            </select>
           </div>
         </div>
 
@@ -405,58 +396,55 @@
         </div>
       </section>
 
-      <!-- 5. GESTÃO DE USUÁRIOS (EXCLUSIVO ADMIN) -->
+      <!-- 5. GESTÃO DE USUÁRIOS (ADMIN) -->
       <section id="paginaUsuarios" class="page">
-        <h2>Gestão de Usuários e Acessos</h2>
+        <h2>Gestão de Usuários do Sistema</h2>
+        <form id="formUsuario" class="card-form" style="max-width: 550px;">
+          <div class="form-group">
+            <label>Nome do Usuário:</label>
+            <input type="text" id="usrNome" required placeholder="Ex: Maria Silva">
+          </div>
+          <div class="form-group">
+            <label>E-mail de Acesso:</label>
+            <input type="email" id="usrEmail" required placeholder="maria@empresa.com">
+          </div>
+          <div class="form-group">
+            <label>Senha de Acesso:</label>
+            <input type="password" id="usrSenha" required placeholder="Sua senha inicial">
+          </div>
+          <div class="form-group">
+            <label>Nível de Acesso:</label>
+            <select id="usrNivel" onchange="alternarCheckboxModulos()">
+              <option value="comum">Usuário Comum</option>
+              <option value="admin">Administrador</option>
+            </select>
+          </div>
 
-        <div class="card-form" style="max-width: 550px; margin-bottom: 25px;">
-          <h3 style="margin-bottom: 12px;">Cadastrar Novo Usuário do Sistema</h3>
-          <form id="formUsuario">
-            <div class="form-group">
-              <label>Nome do Usuário:</label>
-              <input type="text" id="usrNome" required placeholder="Ex: Maria Souza">
+          <div class="form-group" id="grupoModulosAcc">
+            <label>Módulos Permitidos:</label>
+            <div class="checkbox-grid">
+              <label><input type="checkbox" name="usrModulos" value="paginaDashboard"> Dashboard</label>
+              <label><input type="checkbox" name="usrModulos" value="paginaAtendimentos"> Atendimentos Fixos</label>
+              <label><input type="checkbox" name="usrModulos" value="paginaOS"> Lançamento de OS</label>
+              <label><input type="checkbox" name="usrModulos" value="paginaGrade"> Grade de Presença</label>
+              <label><input type="checkbox" name="usrModulos" value="paginaPendencias"> Pendências</label>
+              <label><input type="checkbox" name="usrModulos" value="paginaTarefas"> Tarefas</label>
+              <label><input type="checkbox" name="usrModulos" value="paginaCadastro"> Cadastros</label>
             </div>
-            <div class="form-group">
-              <label>E-mail de Acesso:</label>
-              <input type="email" id="usrEmail" required placeholder="Ex: maria@empresa.com">
-            </div>
-            <div class="form-group">
-              <label>Senha Provisória:</label>
-              <input type="password" id="usrSenha" required placeholder="••••••••">
-            </div>
-            <div class="form-group">
-              <label>Nível de Acesso:</label>
-              <select id="usrNivel" onchange="alternarCheckboxModulos()">
-                <option value="comum">Comum (Acesso Restrito por Módulo)</option>
-                <option value="admin">Administrador (Acesso Total)</option>
-              </select>
-            </div>
+          </div>
 
-            <div class="form-group" id="grupoModulosAcc">
-              <label>Módulos Permitidos:</label>
-              <div class="checkbox-grid">
-                <label><input type="checkbox" name="usrModulos" value="paginaDashboard" checked> Dashboard Analytics</label>
-                <label><input type="checkbox" name="usrModulos" value="paginaOS" checked> Lançamento de OS</label>
-                <label><input type="checkbox" name="usrModulos" value="paginaGrade" checked> Grade de Presença</label>
-                <label><input type="checkbox" name="usrModulos" value="paginaAtendimentos" checked> Atendimentos Fixos</label>
-                <label><input type="checkbox" name="usrModulos" value="paginaPendencias" checked> Pendências e HE</label>
-                <label><input type="checkbox" name="usrModulos" value="paginaTarefas" checked> Quadro de Tarefas</label>
-                <label><input type="checkbox" name="usrModulos" value="paginaCadastro"> Cadastros</label>
-              </div>
-            </div>
+          <button type="submit" class="btn-primary full-width" style="margin-top: 15px;">Cadastrar Usuário</button>
+        </form>
 
-            <button type="submit" class="btn-primary full-width" style="margin-top: 10px;">Criar Usuário</button>
-          </form>
-        </div>
-
-        <div class="table-scroll-wrapper">
+        <h3 style="margin-top: 25px;">Usuários Cadastrados</h3>
+        <div class="table-scroll-wrapper" style="margin-top: 10px;">
           <table class="grid-table">
             <thead>
               <tr>
                 <th>Nome</th>
                 <th>E-mail</th>
                 <th>Nível</th>
-                <th>Módulos Autorizados</th>
+                <th>Módulos</th>
                 <th>Ações</th>
               </tr>
             </thead>
@@ -468,37 +456,90 @@
     </main>
   </div>
 
-  <!-- MODAIS DO SISTEMA -->
-
-  <!-- MODAL: ALTERAR SENHA -->
-  <div id="modalSenha" class="modal">
+  <!-- MODAL DE TROCA DE SENHA -->
+  <div id="modalTrocaSenha" class="modal">
     <div class="modal-content">
-      <span class="close-btn" onclick="fecharModalSenha()">&times;</span>
+      <span class="close-btn" onclick="fecharModalTrocaSenha()">&times;</span>
       <h3>Alterar Minha Senha</h3>
-      <form id="formTrocaSenha" onsubmit="salvarTrocaSenha(event)" style="margin-top:15px;">
+      <p class="sub-title">Digite sua senha atual e a nova senha desejada.</p>
+
+      <form id="formTrocaSenha" onsubmit="salvarNovaSenha(event)">
         <div class="form-group">
           <label>Senha Atual:</label>
-          <input type="password" id="pwdAtual" required placeholder="Digite sua senha atual">
+          <input type="password" id="senhaAtual" required placeholder="Digite sua senha atual">
         </div>
         <div class="form-group">
           <label>Nova Senha:</label>
-          <input type="password" id="pwdNova" required placeholder="Digite a nova senha">
+          <input type="password" id="novaSenha" required placeholder="Digite a nova senha">
         </div>
         <div class="form-group">
           <label>Confirmar Nova Senha:</label>
-          <input type="password" id="pwdConf" required placeholder="Confirme a nova senha">
+          <input type="password" id="confirmarNovaSenha" required placeholder="Confirme a nova senha">
         </div>
-        <button type="submit" class="btn-primary full-width">Atualizar Senha</button>
+        <button type="submit" class="btn-primary full-width" style="margin-top:10px;">Atualizar Senha</button>
       </form>
     </div>
   </div>
 
-  <!-- MODAL: LANÇAMENTO DIÁRIO DE PRESENÇA -->
+  <!-- MODAL DE SELEÇÃO DE ATENDIMENTO FIXO -->
+  <div id="modalSelecaoAtentimento" class="modal">
+    <div class="modal-content" style="width: 500px;">
+      <span class="close-btn" onclick="fecharModalAtendimento()">&times;</span>
+      <h3 id="tituloModalAtendimento">Escalar Funcionários</h3>
+      <p class="sub-title" id="subtituloModalAtendimento"></p>
+
+      <div class="form-group">
+        <label>Pesquisar Colaborador:</label>
+        <input type="text" id="buscaFuncAtendimento" placeholder="🔍 Digite para filtrar..." onkeyup="filtrarListaModalAtendimento()">
+      </div>
+
+      <div id="listaCheckFuncionariosAtendimento" class="checklist-container">
+        <!-- Lista com checkboxes -->
+      </div>
+
+      <button type="button" class="btn-primary full-width" onclick="salvarAtendimentoFixoData()" style="margin-top: 15px;">Salvar Escala do Dia</button>
+    </div>
+  </div>
+
+  <!-- MODAL TAREFA (CRIAR E EDITAR) -->
+  <div id="modalTarefa" class="modal">
+    <div class="modal-content">
+      <span class="close-btn" onclick="fecharModalTarefa()">&times;</span>
+      <h3 id="modalTarefaTituloHeader">Nova Tarefa</h3>
+
+      <form id="formTarefa" onsubmit="salvarTarefa(event)">
+        <input type="hidden" id="tarId">
+        <div class="form-group">
+          <label>Título:</label>
+          <input type="text" id="tarTitulo" required placeholder="Título da tarefa">
+        </div>
+        <div class="form-group">
+          <label>Descrição:</label>
+          <textarea id="tarDescricao" rows="3" placeholder="Detalhes da tarefa..."></textarea>
+        </div>
+        <div class="form-group">
+          <label>Responsável:</label>
+          <input type="text" id="tarResponsavel" placeholder="Nome do responsável">
+        </div>
+        <div class="form-group">
+          <label>Prioridade:</label>
+          <select id="tarPrioridade">
+            <option value="Baixa">Baixa</option>
+            <option value="Média" selected>Média</option>
+            <option value="Alta">Alta</option>
+          </select>
+        </div>
+        <button type="submit" id="btnSalvarTarefa" class="btn-primary full-width" style="margin-top: 10px;">Salvar Tarefa</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL DE LANÇAMENTO DIÁRIO -->
   <div id="modalLancamento" class="modal">
     <div class="modal-content">
       <span class="close-btn" onclick="fecharModal()">&times;</span>
-      <h3>Lançamento Diário</h3>
-      <p class="sub-title"><span id="modalFuncionarioNome"></span> - <span id="modalDataTitulo"></span></p>
+      <h3 id="modalFuncionarioNome">Nome do Funcionário</h3>
+      <p class="sub-title">Lançamento referente ao dia <span id="modalDataTitulo" class="highlight-date"></span></p>
 
       <form id="formModal">
         <div class="form-group">
@@ -513,71 +554,31 @@
         </div>
 
         <div id="modalSecaoApropriacao" class="card-box">
-          <label>Apropriação de Horas (Ordens de Serviço):</label>
+          <label style="font-size:0.8rem; font-weight:bold;">Adicionar Ordem de Serviço (OS):</label>
           <div class="form-row" style="margin-top:5px;">
             <input type="text" id="modalOS" placeholder="Nº OS">
             <input type="number" id="modalHoras" step="0.5" placeholder="Horas">
-            <button type="button" class="btn-secondary" onclick="adicionarOSModal()">Adicionar</button>
+            <button type="button" class="btn-secondary" onclick="adicionarOSModal()">Add</button>
           </div>
           <ul id="modalListaOS" class="os-list"></ul>
         </div>
 
         <div class="form-group">
           <label>Observação:</label>
-          <textarea id="modalObs" rows="2"></textarea>
+          <textarea id="modalObs" rows="2" placeholder="Observações adicionais..."></textarea>
         </div>
 
-        <button type="submit" class="btn-primary full-width">Salvar Lançamento</button>
+        <button type="submit" class="btn-primary full-width" style="margin-top: 10px;">Salvar Lançamento</button>
       </form>
     </div>
   </div>
 
-  <!-- MODAL: FICHA DO FUNCIONÁRIO -->
+  <!-- MODAL INFORMAÇÕES FUNCIONÁRIO -->
   <div id="modalInfoFuncionario" class="modal">
-    <div class="modal-content" style="width: 500px;">
-      <span class="close-btn" onclick="fecharModalInfoFuncionario()">&times;</span>
-      <h3>Ficha Detalhada do Colaborador</h3>
-      <div id="infoFuncionarioBody" class="info-card" style="margin-top:15px;"></div>
-    </div>
-  </div>
-
-  <!-- MODAL: CRIAR OU EDITAR TAREFA -->
-  <div id="modalTarefa" class="modal">
     <div class="modal-content">
-      <span class="close-btn" onclick="fecharModalTarefa()">&times;</span>
-      <h3 id="tituloModalTarefa">Nova Tarefa</h3>
-      <form id="formTarefa" onsubmit="salvarTarefa(event)">
-        <input type="hidden" id="tarId">
-        <div class="form-group">
-          <label>Título da Tarefa:</label>
-          <input type="text" id="tarTitulo" required placeholder="Ex: Fazer manutenção preventia no galpão">
-        </div>
-        <div class="form-group">
-          <label>Descrição:</label>
-          <textarea id="tarDescricao" rows="3" placeholder="Detalhes da tarefa..."></textarea>
-        </div>
-        <div class="form-group">
-          <label>Responsável:</label>
-          <input type="text" id="tarResponsavel" placeholder="Ex: Roberto Ramos">
-        </div>
-        <div class="form-group">
-          <label>Prioridade:</label>
-          <select id="tarPrioridade">
-            <option value="Baixa">Baixa</option>
-            <option value="Média" selected>Média</option>
-            <option value="Alta">Alta</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label>Status:</label>
-          <select id="tarStatus">
-            <option value="A Fazer">A Fazer</option>
-            <option value="Em Andamento">Em Andamento</option>
-            <option value="Concluído">Concluído</option>
-          </select>
-        </div>
-        <button type="submit" class="btn-primary full-width">Salvar Tarefa</button>
-      </form>
+      <span class="close-btn" onclick="fecharModalInfoFuncionario()">&times;</span>
+      <h3>Ficha do Funcionário</h3>
+      <div id="infoFuncionarioBody" class="info-card" style="margin-top: 10px;"></div>
     </div>
   </div>
 

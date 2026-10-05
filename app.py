@@ -124,7 +124,7 @@ def buscar_dados_pendencias(ano, mes, supervisor_filtro, tipo_filtro, busca_func
                 "matricula": matricula or "-", "supervisor": supervisor or "Não informado",
                 "horas_trabalhadas": horas, "carga_padrao": 0, "adicional_tipo": "DESLOCADO",
                 "horas_extras": 0, "status_pendencia": st_pend,
-                "mensagem": "Funcionário Deslocado sem lançamento de Ordens de Serviço (OS)."
+                "mensagem": "Funcionário Deslocado sem lançamento de OS."
             }
         elif situacao in ['Presente', 'Deslocado']:
             calc = calcular_regras_horas(d_data, horas)
@@ -170,7 +170,7 @@ def buscar_dados_pendencias(ano, mes, supervisor_filtro, tipo_filtro, busca_func
 
     return pendencias
 
-# --- AUTENTICAÇÃO, SESSÃO E TROCA DE SENHA ---
+# --- ROTAS DE AUTENTICAÇÃO & TROCA DE SENHA ---
 
 @app.route('/')
 def index():
@@ -241,7 +241,7 @@ def usuario_atual():
         }
     })
 
-@app.route('/api/alterar_senha', methods=['POST'])
+@app.route('/api/usuario/alterar_senha', methods=['POST'])
 @login_required
 def alterar_senha():
     data = request.json or {}
@@ -249,17 +249,16 @@ def alterar_senha():
     nova_senha = data.get('nova_senha', '').strip()
 
     if not senha_atual or not nova_senha:
-        return jsonify({"erro": "Informe a senha atual e a nova senha."}), 400
+        return jsonify({"erro": "Senha atual e nova senha são obrigatórias."}), 400
 
     u_id = session.get('usuario_id')
     res = supabase.table('usuarios').select('senha_hash').eq('id', u_id).execute()
-    
     if not res.data:
         return jsonify({"erro": "Usuário não encontrado."}), 404
 
-    senha_salva = res.data[0].get('senha_hash')
-    if senha_salva != senha_atual:
-        return jsonify({"erro": "A senha atual está incorreta."}), 400
+    user = res.data[0]
+    if user.get('senha_hash') != senha_atual:
+        return jsonify({"erro": "A senha atual informada está incorreta."}), 400
 
     supabase.table('usuarios').update({'senha_hash': nova_senha}).eq('id', u_id).execute()
     return jsonify({"mensagem": "Senha alterada com sucesso!"}), 200
@@ -278,61 +277,41 @@ def gerenciar_atendimentos_fixos():
         inicio = f"{ano}-{mes:02d}-01"
         fim = f"{ano}-{mes:02d}-{num_dias:02d}"
 
-        try:
-            res = supabase.table('atendimentos_fixos')\
-                .select('id, data, aba, funcionario_id, observacao, funcionarios(nome, matricula)')\
-                .eq('aba', aba).gte('data', inicio).lte('data', fim).order('data').execute()
-            
-            mapa_atendimentos = {item['data']: item for item in res.data}
-        except Exception:
-            mapa_atendimentos = {}
+        res = supabase.table('atendimentos_fixos').select('data, funcionario_id, funcionarios(id, nome, matricula, cargo)').eq('aba', aba).gte('data', inicio).lte('data', fim).execute().data
+        
+        atendimentos_map = {}
+        for item in res:
+            d = item['data']
+            if d not in atendimentos_map:
+                atendimentos_map[d] = []
+            atendimentos_map[d].append(item['funcionarios'])
 
-        dias = []
-        for d in range(1, num_dias + 1):
-            d_iso = f"{ano}-{mes:02d}-{d:02d}"
-            dt_obj = datetime.strptime(d_iso, "%Y-%m-%d")
-            semana = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"][dt_obj.weekday()]
-            reg = mapa_atendimentos.get(d_iso, {})
-
-            dias.append({
-                "data": d_iso,
-                "dia_num": d,
-                "dia_semana": semana,
-                "funcionario_id": reg.get('funcionario_id'),
-                "funcionario_nome": reg.get('funcionarios', {}).get('nome') if reg.get('funcionarios') else None,
-                "funcionario_matricula": reg.get('funcionarios', {}).get('matricula') if reg.get('funcionarios') else None,
-                "observacao": reg.get('observacao', '')
-            })
-
-        return jsonify({"ano": ano, "mes": mes, "aba": aba, "dias": dias})
+        return jsonify({
+            "num_dias": num_dias,
+            "ano": ano,
+            "mes": mes,
+            "atendimentos": atendimentos_map
+        })
 
     elif request.method == 'POST':
-        data = request.json or {}
-        d_iso = data.get('data')
-        aba = data.get('aba')
-        f_id = data.get('funcionario_id')
-        obs = data.get('observacao', '')
+        data_req = request.json or {}
+        aba = data_req.get('aba')
+        data_atendimento = data_req.get('data')
+        funcionarios_ids = data_req.get('funcionarios_ids', [])
 
-        if not d_iso or not aba:
-            return jsonify({"erro": "Data e aba são obrigatórias."}), 400
+        if not aba or not data_atendimento:
+            return jsonify({"erro": "Aba e Data são obrigatórias."}), 400
 
-        try:
-            res_existente = supabase.table('atendimentos_fixos').select('id').eq('data', d_iso).eq('aba', aba).execute()
-            if res_existente.data:
-                supabase.table('atendimentos_fixos').update({
-                    'funcionario_id': f_id,
-                    'observacao': obs
-                }).eq('data', d_iso).eq('aba', aba).execute()
-            else:
-                supabase.table('atendimentos_fixos').insert({
-                    'data': d_iso,
-                    'aba': aba,
-                    'funcionario_id': f_id,
-                    'observacao': obs
-                }).execute()
-            return jsonify({"mensagem": "Atendimento fixo salvo com sucesso!"}), 200
-        except Exception:
-            return jsonify({"erro": "Não foi possível salvar o atendimento. Verifique a tabela no banco."}), 500
+        supabase.table('atendimentos_fixos').delete().eq('aba', aba).eq('data', data_atendimento).execute()
+
+        novos = [
+            {"aba": aba, "data": data_atendimento, "funcionario_id": fid}
+            for fid in funcionarios_ids
+        ]
+        if novos:
+            supabase.table('atendimentos_fixos').insert(novos).execute()
+
+        return jsonify({"mensagem": "Atendimento salvo com sucesso!"}), 200
 
 # --- GESTÃO DE USUÁRIOS (ADMIN) ---
 
@@ -384,7 +363,7 @@ def buscar_funcionarios():
     if q:
         query = query.or_(f"nome.ilike.%{q}%,matricula.ilike.%{q}%")
     
-    res = query.order('nome').limit(15).execute()
+    res = query.order('nome').limit(20).execute()
     return jsonify(res.data)
 
 @app.route('/api/funcionarios', methods=['GET', 'POST', 'PUT', 'DELETE'])
@@ -421,15 +400,12 @@ def gerenciar_funcionarios():
             supabase.table('funcionarios').update(payload).eq('id', f_id).execute()
             return jsonify({"mensagem": "Funcionário atualizado!"}), 200
         except Exception:
-            return jsonify({"erro": "Erro ao atualizar o funcionário."}), 400
+            return jsonify({"erro": "Erro ao atualizar funcionário."}), 400
 
     elif request.method == 'DELETE':
         func_id = request.args.get('id')
-        if not func_id:
-            return jsonify({"erro": "ID do funcionário é obrigatório."}), 400
-
         supabase.table('funcionarios').delete().eq('id', func_id).execute()
-        return jsonify({"mensagem": "Funcionário excluído com sucesso!"}), 200
+        return jsonify({"mensagem": "Funcionário excluído!"}), 200
 
     else:
         res = supabase.table('funcionarios').select('id, matricula, nome, cargo, atuacao, supervisor, inicio_atividades').order('atuacao').order('nome').execute()
@@ -450,14 +426,15 @@ def obter_detalhes_funcionario(func_id):
     for ap in res_aprop:
         horas_map[ap['data']] = horas_map.get(ap['data'], 0.0) + float(ap['horas'])
 
-    historico = []
-    for p in res_presenca:
-        historico.append({
+    historico = [
+        {
             "data": p['data'],
             "situacao": p['situacao'],
             "horas": horas_map.get(p['data'], 0.0),
             "observacao": p.get('observacao', '')
-        })
+        }
+        for p in res_presenca
+    ]
 
     return jsonify({"info": f_info, "historico": historico})
 
@@ -474,7 +451,7 @@ def salvar_lancamento_os():
     funcionarios_ids = data_req.get('funcionarios_ids', [])
 
     if not ordem_servico or not data_reg or horas <= 0 or not funcionarios_ids:
-        return jsonify({"erro": "Preencha todos os campos obrigatórios e selecione ao menos um funcionário."}), 400
+        return jsonify({"erro": "Preencha todos os campos obrigatórios."}), 400
 
     obs_texto = f"OS: {ordem_servico} - {descricao}" if descricao else f"OS: {ordem_servico}"
 
@@ -505,7 +482,7 @@ def salvar_lancamento_os():
             'horas': horas
         }).execute()
 
-    return jsonify({"mensagem": f"OS {ordem_servico} lançada para {len(funcionarios_ids)} funcionário(s)!"}), 200
+    return jsonify({"mensagem": f"OS {ordem_servico} lançada com sucesso!"}), 200
 
 # --- GRADE MATRICIAL ---
 
@@ -605,11 +582,9 @@ def exportar_pendencias_excel():
 
     pendencias = buscar_dados_pendencias(ano, mes, supervisor_filtro, tipo_filtro, busca_func, data_inicio, data_fim)
 
-    dados_excel = []
-    for item in pendencias:
-        dt_br = "/".join(item['data'].split("-")[::-1])
-        dados_excel.append({
-            "Data": dt_br,
+    dados_excel = [
+        {
+            "Data": "/".join(item['data'].split("-")[::-1]),
             "Matrícula": item.get('matricula', '-'),
             "Funcionário": item['funcionario'],
             "Supervisor": item['supervisor'],
@@ -619,7 +594,9 @@ def exportar_pendencias_excel():
             "Tipo Pendência": item['adicional_tipo'],
             "Status": "PENDENTE",
             "Ocorrência / Motivo": item['mensagem']
-        })
+        }
+        for item in pendencias
+    ]
 
     df = pd.DataFrame(dados_excel)
     output = io.BytesIO()
@@ -644,7 +621,7 @@ def sanar_pendencia():
     data_reg = data_req.get('data')
 
     supabase.table('presencas').update({'status_pendencia': 'SANADA'}).eq('funcionario_id', f_id).eq('data', data_reg).execute()
-    return jsonify({"mensagem": "Pendência sanada e removida com sucesso!"}), 200
+    return jsonify({"mensagem": "Pendência sanada com sucesso!"}), 200
 
 # --- DASHBOARD ---
 
@@ -726,13 +703,13 @@ def obter_dashboard():
         }
     })
 
-# --- QUADRO DE TAREFAS (EDIÇÃO COMPLETA) ---
+# --- QUADRO DE TAREFAS (EDIÇÃO E CRIAÇÃO) ---
 
 @app.route('/api/tarefas', methods=['GET', 'POST', 'PUT', 'DELETE'])
 @login_required
 def gerenciar_tarefas():
     if request.method == 'GET':
-        res = supabase.table('tarefas').select('*').execute()
+        res = supabase.table('tarefas').select('*').order('id', desc=True).execute()
         return jsonify(res.data)
 
     elif request.method == 'POST':
@@ -742,31 +719,35 @@ def gerenciar_tarefas():
             "descricao": data.get('descricao'),
             "responsavel": data.get('responsavel'),
             "prioridade": data.get('prioridade'),
-            "status": data.get('status', 'A Fazer')
+            "status": 'A Fazer'
         }
         supabase.table('tarefas').insert(payload).execute()
-        return jsonify({"mensagem": "Tarefa criada com sucesso!"}), 201
+        return jsonify({"mensagem": "Tarefa criada!"}), 201
 
     elif request.method == 'PUT':
         data = request.json
         t_id = data.get('id')
-        
         payload = {}
-        if 'titulo' in data: payload['titulo'] = data['titulo']
-        if 'descricao' in data: payload['descricao'] = data['descricao']
-        if 'responsavel' in data: payload['responsavel'] = data['responsavel']
-        if 'prioridade' in data: payload['prioridade'] = data['prioridade']
-        if 'status' in data: payload['status'] = data['status']
+        if 'status' in data:
+            payload['status'] = data['status']
+        if 'titulo' in data:
+            payload['titulo'] = data['titulo']
+        if 'descricao' in data:
+            payload['descricao'] = data['descricao']
+        if 'responsavel' in data:
+            payload['responsavel'] = data['responsavel']
+        if 'prioridade' in data:
+            payload['prioridade'] = data['prioridade']
 
         supabase.table('tarefas').update(payload).eq('id', t_id).execute()
-        return jsonify({"mensagem": "Tarefa atualizada com sucesso!"}), 200
+        return jsonify({"mensagem": "Tarefa atualizada!"}), 200
 
     elif request.method == 'DELETE':
         tarefa_id = request.args.get('id')
         supabase.table('tarefas').delete().eq('id', tarefa_id).execute()
         return jsonify({"mensagem": "Tarefa excluída!"}), 200
 
-# --- DETALHES E SALVAMENTO DIÁRIO ---
+# --- DETALHES E SALVAMENTO ---
 
 @app.route('/api/lancamento/detalhes', methods=['GET'])
 @login_required

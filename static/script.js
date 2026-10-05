@@ -6,7 +6,12 @@ let dadosGradeCache = null;
 let listaTarefasCache = [];
 let funcionariosOSSelecionados = [];
 let usuarioSessao = null;
+
+// Variáveis para Atendimentos Fixos
 let abaAtendimentoAtual = 'FACILITIES';
+let dataAtendimentoSelecionada = null;
+let funcionariosDisponiveisAtendimento = [];
+let atendimentosFixosCache = {};
 
 document.addEventListener("DOMContentLoaded", async () => {
   const hoje = new Date();
@@ -16,30 +21,24 @@ document.addEventListener("DOMContentLoaded", async () => {
   if (document.getElementById("filtroMesAno")) document.getElementById("filtroMesAno").value = mesAtual;
   if (document.getElementById("filtroPendenciasMes")) document.getElementById("filtroPendenciasMes").value = mesAtual;
   if (document.getElementById("filtroDashboardMes")) document.getElementById("filtroDashboardMes").value = mesAtual;
-  if (document.getElementById("filtroAtendimentoMes")) document.getElementById("filtroAtendimentoMes").value = mesAtual;
+  if (document.getElementById("filtroAtendimentosMes")) document.getElementById("filtroAtendimentosMes").value = mesAtual;
   if (document.getElementById("osData")) document.getElementById("osData").value = dataHojeIso;
   
   await verificarSessaoUsuario();
 });
 
 function toggleSidebar() {
-  const sb = document.getElementById("sidebar");
-  if (sb) sb.classList.toggle("open");
+  const sidebar = document.getElementById("sidebar");
+  sidebar.classList.toggle("open");
 }
 
 async function verificarSessaoUsuario() {
   try {
     const res = await fetch('/api/usuario_atual');
-    if (!res.ok) {
-      window.location.href = '/';
-      return;
-    }
+    if (!res.ok) { window.location.href = '/'; return; }
 
     const data = await res.json();
-    if (!data.logado) {
-      window.location.href = '/';
-      return;
-    }
+    if (!data.logado) { window.location.href = '/'; return; }
 
     usuarioSessao = data.usuario;
     document.getElementById("nomeUsuarioLogado").innerText = `👤 ${usuarioSessao.nome} (${usuarioSessao.nivel.toUpperCase()})`;
@@ -51,7 +50,7 @@ async function verificarSessaoUsuario() {
 }
 
 function aplicarPermissoesMenu() {
-  const todosModulos = ['paginaDashboard', 'paginaOS', 'paginaGrade', 'paginaAtendimentos', 'paginaPendencias', 'paginaTarefas', 'paginaCadastro', 'paginaUsuarios'];
+  const todosModulos = ['paginaDashboard', 'paginaAtendimentos', 'paginaOS', 'paginaGrade', 'paginaPendencias', 'paginaTarefas', 'paginaCadastro', 'paginaUsuarios'];
   let primeiraPaginaDisponivel = null;
 
   todosModulos.forEach(modId => {
@@ -90,7 +89,7 @@ function mostrarPagina(paginaId) {
   }
 
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.sidebar-nav .nav-btn').forEach(b => b.classList.remove('active'));
   
   const pgEl = document.getElementById(paginaId);
   if (pgEl) pgEl.classList.add('active');
@@ -99,13 +98,12 @@ function mostrarPagina(paginaId) {
   if (btnEl) btnEl.classList.add('active');
 
   if (window.innerWidth <= 768) {
-    const sb = document.getElementById("sidebar");
-    if (sb) sb.classList.remove("open");
+    document.getElementById("sidebar").classList.remove("open");
   }
 
   if (paginaId === 'paginaDashboard') carregarDashboard();
-  if (paginaId === 'paginaGrade') carregarGrade();
   if (paginaId === 'paginaAtendimentos') carregarAtendimentosFixos();
+  if (paginaId === 'paginaGrade') carregarGrade();
   if (paginaId === 'paginaCadastro') carregarListaCadastro();
   if (paginaId === 'paginaPendencias') carregarPendencias();
   if (paginaId === 'paginaTarefas') carregarTarefas();
@@ -113,38 +111,160 @@ function mostrarPagina(paginaId) {
 }
 
 // TROCA DE SENHA
-function abrirModalSenha() {
+function abrirModalTrocaSenha() {
   document.getElementById("formTrocaSenha").reset();
-  document.getElementById("modalSenha").style.display = "block";
+  document.getElementById("modalTrocaSenha").style.display = "block";
 }
 
-function fecharModalSenha() {
-  document.getElementById("modalSenha").style.display = "none";
+function fecharModalTrocaSenha() {
+  document.getElementById("modalTrocaSenha").style.display = "none";
 }
 
-async function salvarTrocaSenha(e) {
+async function salvarNovaSenha(e) {
   e.preventDefault();
-  const senha_atual = document.getElementById("pwdAtual").value;
-  const nova_senha = document.getElementById("pwdNova").value;
-  const conf = document.getElementById("pwdConf").value;
+  const senhaAtual = document.getElementById("senhaAtual").value;
+  const novaSenha = document.getElementById("novaSenha").value;
+  const confirmarNovaSenha = document.getElementById("confirmarNovaSenha").value;
 
-  if (nova_senha !== conf) {
-    alert("A nova senha e a confirmação não coincidem.");
+  if (novaSenha !== confirmarNovaSenha) {
+    alert("A confirmação da nova senha não confere com a nova senha digitada.");
     return;
   }
 
-  const res = await fetch('/api/alterar_senha', {
+  const res = await fetch('/api/usuario/alterar_senha', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ senha_atual, nova_senha })
+    body: JSON.stringify({ senha_atual: senhaAtual, nova_senha: novaSenha })
   });
 
-  const data = await res.json();
+  const resJson = await res.json();
   if (res.ok) {
-    alert(data.mensagem);
-    fecharModalSenha();
+    alert(resJson.mensagem);
+    fecharModalTrocaSenha();
   } else {
-    alert(data.erro || "Erro ao alterar senha.");
+    alert(resJson.erro || "Erro ao alterar a senha.");
+  }
+}
+
+// PÁGINA DE ATENDIMENTOS FIXOS (5 ABAS & CALENDÁRIO VERTICAL)
+function trocarAbaAtendimento(novaAba, btnElement) {
+  abaAtendimentoAtual = novaAba;
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  btnElement.classList.add('active');
+  carregarAtendimentosFixos();
+}
+
+async function carregarAtendimentosFixos() {
+  const [ano, mes] = document.getElementById("filtroAtendimentosMes").value.split("-");
+  const res = await fetch(`/api/atendimentos_fixos?aba=${abaAtendimentoAtual}&ano=${ano}&mes=${mes}`);
+  const data = await res.json();
+
+  atendimentosFixosCache = data.atendimentos || {};
+
+  const resFunc = await fetch('/api/funcionarios');
+  funcionariosDisponiveisAtendimento = await resFunc.json();
+
+  const tbody = document.getElementById("tabelaAtendimentosFixos");
+  tbody.innerHTML = "";
+
+  const diasSemana = ["Segunda-feira", "Terça-feira", "Quarta-feira", "Quinta-feira", "Sexta-feira", "Sábado", "Domingo"];
+
+  for (let d = 1; d <= data.num_dias; d++) {
+    const diaStr = String(d).padStart(2, '0');
+    const dataIso = `${data.ano}-${String(data.mes).padStart(2, '0')}-${diaStr}`;
+    const dtObj = new Date(data.ano, data.mes - 1, d);
+    const nomeDia = diasSemana[dtObj.getDay() === 0 ? 6 : dtObj.getDay() - 1];
+
+    const escalaDia = atendimentosFixosCache[dataIso] || [];
+    let badgeEquipe = escalaDia.map(f => `<span class="func-tag-small">👤 ${f.nome}</span>`).join(" ");
+
+    if (!badgeEquipe) {
+      badgeEquipe = `<span style="color:#94a3b8; font-style:italic;">Nenhum funcionário escalado</span>`;
+    }
+
+    tbody.innerHTML += `
+      <tr>
+        <td><b>${diaStr}/${data.mes}/${data.ano}</b></td>
+        <td><small>${nomeDia}</small></td>
+        <td style="text-align:left;">${badgeEquipe}</td>
+        <td>
+          <button class="btn-secondary" onclick="abrirModalEscalarAtendimento('${dataIso}')">Escalar</button>
+        </td>
+      </tr>
+    `;
+  }
+}
+
+function abrirModalEscalarAtendimento(dataIso) {
+  dataAtendimentoSelecionada = dataIso;
+  const dataBr = dataIso.split('-').reverse().join('/');
+  
+  document.getElementById("tituloModalAtendimento").innerText = `Escala Fixa - ${abaAtendimentoAtual}`;
+  document.getElementById("subtituloModalAtendimento").innerText = `Selecione os funcionários para o dia ${dataBr}`;
+
+  document.getElementById("buscaFuncAtendimento").value = "";
+  renderizarListaModalAtendimento();
+  
+  document.getElementById("modalSelecaoAtentimento").style.display = "block";
+}
+
+function fecharModalAtendimento() {
+  document.getElementById("modalSelecaoAtentimento").style.display = "none";
+}
+
+function renderizarListaModalAtendimento() {
+  const container = document.getElementById("listaCheckFuncionariosAtendimento");
+  const termo = document.getElementById("buscaFuncAtendimento").value.toLowerCase().trim();
+  container.innerHTML = "";
+
+  const escaladosAtuais = atendimentosFixosCache[dataAtendimentoSelecionada] || [];
+  const idsEscalados = escaladosAtuais.map(f => f.id);
+
+  const filtrados = funcionariosDisponiveisAtendimento.filter(f => {
+    return !termo || f.nome.toLowerCase().includes(termo) || (f.matricula && f.matricula.toLowerCase().includes(termo));
+  });
+
+  if (filtrados.length === 0) {
+    container.innerHTML = `<div style="padding:10px; color:#94a3b8;">Nenhum funcionário encontrado.</div>`;
+    return;
+  }
+
+  filtrados.forEach(f => {
+    const isChecked = idsEscalados.includes(f.id) ? 'checked' : '';
+    container.innerHTML += `
+      <label class="check-item">
+        <input type="checkbox" class="chk-atendimento" value="${f.id}" ${isChecked}>
+        <span><b>${f.nome}</b> <small>(${f.matricula || '-'} | ${f.cargo || '-'})</small></span>
+      </label>
+    `;
+  });
+}
+
+function filtrarListaModalAtendimento() {
+  renderizarListaModalAtendimento();
+}
+
+async function salvarAtendimentoFixoData() {
+  const chks = document.querySelectorAll('.chk-atendimento:checked');
+  const idsSelecionados = Array.from(chks).map(c => parseInt(c.value));
+
+  const payload = {
+    aba: abaAtendimentoAtual,
+    data: dataAtendimentoSelecionada,
+    funcionarios_ids: idsSelecionados
+  };
+
+  const res = await fetch('/api/atendimentos_fixos', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+
+  if (res.ok) {
+    fecharModalAtendimento();
+    carregarAtendimentosFixos();
+  } else {
+    alert("Erro ao salvar escala fixa.");
   }
 }
 
@@ -304,22 +424,6 @@ async function carregarGrade() {
   aplicarFiltrosGrade();
 }
 
-function sincronizarScrollGrade(origem) {
-  const topWrapper = document.getElementById("topScrollWrapper");
-  const gridWrapper = document.getElementById("gradeScrollWrapper");
-
-  if (origem === 'top') {
-    gridWrapper.scrollLeft = topWrapper.scrollLeft;
-  } else {
-    topWrapper.scrollLeft = gridWrapper.scrollLeft;
-  }
-}
-
-function rolarGradeHorizontal(deslocamento) {
-  const gridWrapper = document.getElementById("gradeScrollWrapper");
-  gridWrapper.scrollBy({ left: deslocamento, behavior: 'smooth' });
-}
-
 function aplicarFiltrosGrade() {
   if (!dadosGradeCache) return;
 
@@ -332,8 +436,8 @@ function aplicarFiltrosGrade() {
 
   gridHeader.innerHTML = `
     <th class="col-fixed">Funcionário</th>
-    <th class="col-fixed">Cargo</th>
-    <th class="col-fixed">Atuação</th>
+    <th class="col-fixed col-cargo">Cargo</th>
+    <th class="col-fixed col-atuacao">Atuação</th>
   `;
 
   for (let d = 1; d <= dadosGradeCache.num_dias; d++) {
@@ -381,8 +485,8 @@ function aplicarFiltrosGrade() {
         <td class="col-fixed func-click" onclick="abrirModalInfoFuncionario(${f.id})">
           <b>${f.nome}</b><br><small>Mat: ${f.matricula || '-'} | Sup: ${f.supervisor || '-'}</small>
         </td>
-        <td class="col-fixed">${f.cargo}</td>
-        <td class="col-fixed">${f.atuacao}</td>
+        <td class="col-fixed col-cargo">${f.cargo}</td>
+        <td class="col-fixed col-atuacao">${f.atuacao}</td>
     `;
 
     for (let d = 1; d <= dadosGradeCache.num_dias; d++) {
@@ -432,118 +536,6 @@ function aplicarFiltrosGrade() {
     linha += `</tr>`;
     gridBody.innerHTML += linha;
   });
-
-  setTimeout(() => {
-    const tableWidth = document.querySelector('.grid-table').scrollWidth;
-    document.getElementById("topScrollInner").style.width = `${tableWidth}px`;
-  }, 100);
-}
-
-// ATENDIMENTOS FIXOS (ABAS & CALENDÁRIO VERTICAL)
-function trocarAbaAtendimento(aba) {
-  abaAtendimentoAtual = aba;
-  document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
-  document.getElementById(`tab-${aba}`).classList.add('active');
-
-  const titulos = {
-    'FACILITIES': 'ATENDIMENTO FACILITIES',
-    'LOGISTICA': 'ATENDIMENTO LOGISTICA',
-    'OPERACAO': 'ATENDIMENTO OPERAÇÃO',
-    'ELETRICA': 'ATENDIMENTO A ELETRICA',
-    'PATIO': 'ATENDIMENTO AO PATIO'
-  };
-
-  document.getElementById("tituloAbaAtendimento").innerText = `Calendário - ${titulos[aba]}`;
-  carregarAtendimentosFixos();
-}
-
-async function carregarAtendimentosFixos() {
-  const [ano, mes] = document.getElementById("filtroAtendimentoMes").value.split("-");
-  const res = await fetch(`/api/atendimentos_fixos?aba=${abaAtendimentoAtual}&ano=${ano}&mes=${mes}`);
-  const data = await res.json();
-
-  const tbody = document.getElementById("tabelaAtendimentosFixos");
-  tbody.innerHTML = "";
-
-  data.dias.forEach(d => {
-    const dtBr = d.data.split('-').reverse().join('/');
-    
-    tbody.innerHTML += `
-      <tr>
-        <td><b>${dtBr}</b></td>
-        <td>${d.dia_semana}</td>
-        <td>
-          <div class="autocomplete-wrapper">
-            <input type="text" id="atend_input_${d.data}" value="${d.funcionario_nome ? d.funcionario_nome + ' (' + (d.funcionario_matricula || '-') + ')' : ''}" placeholder="🔍 Pesquisar funcionário..." onkeyup="buscarAtendenteFixos('${d.data}', this.value)">
-            <input type="hidden" id="atend_id_${d.data}" value="${d.funcionario_id || ''}">
-            <ul id="atend_list_${d.data}" class="autocomplete-list"></ul>
-          </div>
-        </td>
-        <td>
-          <input type="text" id="atend_obs_${d.data}" value="${d.observacao || ''}" placeholder="Observação..." style="width:100%;">
-        </td>
-        <td>
-          <button class="btn-primary" onclick="salvarAtendimentoFixo('${d.data}')">Salvar</button>
-        </td>
-      </tr>
-    `;
-  });
-}
-
-async function buscarAtendenteFixos(dataIso, termo) {
-  const ul = document.getElementById(`atend_list_${dataIso}`);
-  if (!termo.trim()) {
-    ul.style.display = "none";
-    return;
-  }
-
-  const res = await fetch(`/api/funcionarios/buscar?q=${encodeURIComponent(termo)}`);
-  const lista = await res.json();
-
-  ul.innerHTML = "";
-  if (lista.length === 0) {
-    ul.innerHTML = `<li style="color:#94a3b8; cursor:default;">Nenhum funcionário encontrado</li>`;
-  } else {
-    lista.forEach(f => {
-      ul.innerHTML += `
-        <li onclick="selecionarAtendenteFixo('${dataIso}', ${f.id}, '${f.nome}', '${f.matricula || ''}')">
-          <b>${f.nome}</b> <small>(${f.matricula || '-'})</small>
-        </li>
-      `;
-    });
-  }
-  ul.style.display = "block";
-}
-
-function selecionarAtendenteFixo(dataIso, id, nome, matricula) {
-  document.getElementById(`atend_input_${dataIso}`).value = `${nome} (${matricula})`;
-  document.getElementById(`atend_id_${dataIso}`).value = id;
-  document.getElementById(`atend_list_${dataIso}`).style.display = "none";
-}
-
-async function salvarAtendimentoFixo(dataIso) {
-  const f_id = document.getElementById(`atend_id_${dataIso}`).value;
-  const obs = document.getElementById(`atend_obs_${dataIso}`).value;
-
-  const payload = {
-    data: dataIso,
-    aba: abaAtendimentoAtual,
-    funcionario_id: f_id ? parseInt(f_id) : null,
-    observacao: obs
-  };
-
-  const res = await fetch('/api/atendimentos_fixos', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  });
-
-  const data = await res.json();
-  if (res.ok) {
-    alert("Atendimento registrado!");
-  } else {
-    alert(data.erro || "Erro ao salvar atendimento.");
-  }
 }
 
 // MODAL DE LANÇAMENTO DIÁRIO
@@ -745,7 +737,7 @@ function fecharModalInfoFuncionario() {
   document.getElementById("modalInfoFuncionario").style.display = "none";
 }
 
-// 3. QUADRO DE TAREFAS (EDIÇÃO COMPLETA)
+// 3. QUADRO DE TAREFAS (COM EDIÇÃO)
 async function carregarTarefas() {
   const res = await fetch('/api/tarefas');
   listaTarefasCache = await res.json();
@@ -770,8 +762,8 @@ function renderizarKanban() {
         ${t.descricao ? `<div class="card-desc">${t.descricao}</div>` : ''}
         <div class="card-footer">
           <span class="card-user">👤 ${t.responsavel || 'Sem dono'}</span>
-          <div>
-            <button class="btn-secondary-sm" onclick="editarTarefa(${t.id})">✏️ Editar</button>
+          <div style="display:flex; gap:4px;">
+            <button class="btn-edit-task" onclick="editarTarefa(${t.id})">✏️</button>
             <button class="btn-remove-os" onclick="excluirTarefa(${t.id})">✕</button>
           </div>
         </div>
@@ -808,11 +800,12 @@ async function drop(ev, novoStatus) {
   carregarTarefas();
 }
 
-function abrirModalNovaTarefa() { 
+function abrirModalTarefa() {
   document.getElementById('tarId').value = '';
   document.getElementById('formTarefa').reset();
-  document.getElementById('tituloModalTarefa').innerText = "Nova Tarefa";
-  document.getElementById('modalTarefa').style.display = 'block'; 
+  document.getElementById('modalTarefaTituloHeader').innerText = "Nova Tarefa";
+  document.getElementById('btnSalvarTarefa').innerText = "Salvar Tarefa";
+  document.getElementById('modalTarefa').style.display = 'block';
 }
 
 function editarTarefa(id) {
@@ -824,9 +817,9 @@ function editarTarefa(id) {
   document.getElementById('tarDescricao').value = t.descricao || '';
   document.getElementById('tarResponsavel').value = t.responsavel || '';
   document.getElementById('tarPrioridade').value = t.prioridade || 'Média';
-  document.getElementById('tarStatus').value = t.status || 'A Fazer';
 
-  document.getElementById('tituloModalTarefa').innerText = "Editar Tarefa";
+  document.getElementById('modalTarefaTituloHeader').innerText = "Editar Tarefa";
+  document.getElementById('btnSalvarTarefa').innerText = "Atualizar Tarefa";
   document.getElementById('modalTarefa').style.display = 'block';
 }
 
@@ -840,14 +833,13 @@ async function salvarTarefa(e) {
     titulo: document.getElementById('tarTitulo').value,
     descricao: document.getElementById('tarDescricao').value,
     responsavel: document.getElementById('tarResponsavel').value,
-    prioridade: document.getElementById('tarPrioridade').value,
-    status: document.getElementById('tarStatus').value
+    prioridade: document.getElementById('tarPrioridade').value
   };
 
   const method = id ? 'PUT' : 'POST';
 
   await fetch('/api/tarefas', {
-    method: method,
+    method,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
   });
@@ -871,7 +863,7 @@ async function carregarListaCadastro() {
   const selectArea = document.getElementById("filtroCadastroArea");
   if (selectArea) {
     const areas = [...new Set(listaFuncionariosCache.map(f => f.atuacao).filter(Boolean))];
-    selectArea.innerHTML = `<option value="">Todas as Áreas de Atuação</option>`;
+    selectArea.innerHTML = `<option value="">Todas as Áreas</option>`;
     areas.forEach(a => selectArea.innerHTML += `<option value="${a}">${a}</option>`);
   }
 
