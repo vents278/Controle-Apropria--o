@@ -6,6 +6,7 @@ let dadosGradeCache = null;
 let listaTarefasCache = [];
 let funcionariosOSSelecionados = [];
 let usuarioSessao = null;
+let abaAtendimentoAtual = 'FACILITIES';
 
 document.addEventListener("DOMContentLoaded", async () => {
   const hoje = new Date();
@@ -15,10 +16,16 @@ document.addEventListener("DOMContentLoaded", async () => {
   if (document.getElementById("filtroMesAno")) document.getElementById("filtroMesAno").value = mesAtual;
   if (document.getElementById("filtroPendenciasMes")) document.getElementById("filtroPendenciasMes").value = mesAtual;
   if (document.getElementById("filtroDashboardMes")) document.getElementById("filtroDashboardMes").value = mesAtual;
+  if (document.getElementById("filtroAtendimentoMes")) document.getElementById("filtroAtendimentoMes").value = mesAtual;
   if (document.getElementById("osData")) document.getElementById("osData").value = dataHojeIso;
   
   await verificarSessaoUsuario();
 });
+
+function toggleSidebar() {
+  const sb = document.getElementById("sidebar");
+  if (sb) sb.classList.toggle("open");
+}
 
 async function verificarSessaoUsuario() {
   try {
@@ -44,7 +51,7 @@ async function verificarSessaoUsuario() {
 }
 
 function aplicarPermissoesMenu() {
-  const todosModulos = ['paginaDashboard', 'paginaOS', 'paginaGrade', 'paginaPendencias', 'paginaTarefas', 'paginaCadastro', 'paginaUsuarios'];
+  const todosModulos = ['paginaDashboard', 'paginaOS', 'paginaGrade', 'paginaAtendimentos', 'paginaPendencias', 'paginaTarefas', 'paginaCadastro', 'paginaUsuarios'];
   let primeiraPaginaDisponivel = null;
 
   todosModulos.forEach(modId => {
@@ -52,13 +59,13 @@ function aplicarPermissoesMenu() {
     if (!btn) return;
 
     if (usuarioSessao.nivel === 'admin') {
-      btn.style.display = 'inline-block';
+      btn.style.display = 'block';
       if (!primeiraPaginaDisponivel) primeiraPaginaDisponivel = modId;
     } else {
       if (modId === 'paginaUsuarios') {
         btn.style.display = 'none';
       } else if (usuarioSessao.modulos.includes(modId)) {
-        btn.style.display = 'inline-block';
+        btn.style.display = 'block';
         if (!primeiraPaginaDisponivel) primeiraPaginaDisponivel = modId;
       } else {
         btn.style.display = 'none';
@@ -91,12 +98,54 @@ function mostrarPagina(paginaId) {
   const btnEl = document.getElementById(`btn-${paginaId}`);
   if (btnEl) btnEl.classList.add('active');
 
+  if (window.innerWidth <= 768) {
+    const sb = document.getElementById("sidebar");
+    if (sb) sb.classList.remove("open");
+  }
+
   if (paginaId === 'paginaDashboard') carregarDashboard();
   if (paginaId === 'paginaGrade') carregarGrade();
+  if (paginaId === 'paginaAtendimentos') carregarAtendimentosFixos();
   if (paginaId === 'paginaCadastro') carregarListaCadastro();
   if (paginaId === 'paginaPendencias') carregarPendencias();
   if (paginaId === 'paginaTarefas') carregarTarefas();
   if (paginaId === 'paginaUsuarios') carregarUsuarios();
+}
+
+// TROCA DE SENHA
+function abrirModalSenha() {
+  document.getElementById("formTrocaSenha").reset();
+  document.getElementById("modalSenha").style.display = "block";
+}
+
+function fecharModalSenha() {
+  document.getElementById("modalSenha").style.display = "none";
+}
+
+async function salvarTrocaSenha(e) {
+  e.preventDefault();
+  const senha_atual = document.getElementById("pwdAtual").value;
+  const nova_senha = document.getElementById("pwdNova").value;
+  const conf = document.getElementById("pwdConf").value;
+
+  if (nova_senha !== conf) {
+    alert("A nova senha e a confirmação não coincidem.");
+    return;
+  }
+
+  const res = await fetch('/api/alterar_senha', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ senha_atual, nova_senha })
+  });
+
+  const data = await res.json();
+  if (res.ok) {
+    alert(data.mensagem);
+    fecharModalSenha();
+  } else {
+    alert(data.erro || "Erro ao alterar senha.");
+  }
 }
 
 // 0. DASHBOARD
@@ -255,6 +304,22 @@ async function carregarGrade() {
   aplicarFiltrosGrade();
 }
 
+function sincronizarScrollGrade(origem) {
+  const topWrapper = document.getElementById("topScrollWrapper");
+  const gridWrapper = document.getElementById("gradeScrollWrapper");
+
+  if (origem === 'top') {
+    gridWrapper.scrollLeft = topWrapper.scrollLeft;
+  } else {
+    topWrapper.scrollLeft = gridWrapper.scrollLeft;
+  }
+}
+
+function rolarGradeHorizontal(deslocamento) {
+  const gridWrapper = document.getElementById("gradeScrollWrapper");
+  gridWrapper.scrollBy({ left: deslocamento, behavior: 'smooth' });
+}
+
 function aplicarFiltrosGrade() {
   if (!dadosGradeCache) return;
 
@@ -367,6 +432,118 @@ function aplicarFiltrosGrade() {
     linha += `</tr>`;
     gridBody.innerHTML += linha;
   });
+
+  setTimeout(() => {
+    const tableWidth = document.querySelector('.grid-table').scrollWidth;
+    document.getElementById("topScrollInner").style.width = `${tableWidth}px`;
+  }, 100);
+}
+
+// ATENDIMENTOS FIXOS (ABAS & CALENDÁRIO VERTICAL)
+function trocarAbaAtendimento(aba) {
+  abaAtendimentoAtual = aba;
+  document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+  document.getElementById(`tab-${aba}`).classList.add('active');
+
+  const titulos = {
+    'FACILITIES': 'ATENDIMENTO FACILITIES',
+    'LOGISTICA': 'ATENDIMENTO LOGISTICA',
+    'OPERACAO': 'ATENDIMENTO OPERAÇÃO',
+    'ELETRICA': 'ATENDIMENTO A ELETRICA',
+    'PATIO': 'ATENDIMENTO AO PATIO'
+  };
+
+  document.getElementById("tituloAbaAtendimento").innerText = `Calendário - ${titulos[aba]}`;
+  carregarAtendimentosFixos();
+}
+
+async function carregarAtendimentosFixos() {
+  const [ano, mes] = document.getElementById("filtroAtendimentoMes").value.split("-");
+  const res = await fetch(`/api/atendimentos_fixos?aba=${abaAtendimentoAtual}&ano=${ano}&mes=${mes}`);
+  const data = await res.json();
+
+  const tbody = document.getElementById("tabelaAtendimentosFixos");
+  tbody.innerHTML = "";
+
+  data.dias.forEach(d => {
+    const dtBr = d.data.split('-').reverse().join('/');
+    
+    tbody.innerHTML += `
+      <tr>
+        <td><b>${dtBr}</b></td>
+        <td>${d.dia_semana}</td>
+        <td>
+          <div class="autocomplete-wrapper">
+            <input type="text" id="atend_input_${d.data}" value="${d.funcionario_nome ? d.funcionario_nome + ' (' + (d.funcionario_matricula || '-') + ')' : ''}" placeholder="🔍 Pesquisar funcionário..." onkeyup="buscarAtendenteFixos('${d.data}', this.value)">
+            <input type="hidden" id="atend_id_${d.data}" value="${d.funcionario_id || ''}">
+            <ul id="atend_list_${d.data}" class="autocomplete-list"></ul>
+          </div>
+        </td>
+        <td>
+          <input type="text" id="atend_obs_${d.data}" value="${d.observacao || ''}" placeholder="Observação..." style="width:100%;">
+        </td>
+        <td>
+          <button class="btn-primary" onclick="salvarAtendimentoFixo('${d.data}')">Salvar</button>
+        </td>
+      </tr>
+    `;
+  });
+}
+
+async function buscarAtendenteFixos(dataIso, termo) {
+  const ul = document.getElementById(`atend_list_${dataIso}`);
+  if (!termo.trim()) {
+    ul.style.display = "none";
+    return;
+  }
+
+  const res = await fetch(`/api/funcionarios/buscar?q=${encodeURIComponent(termo)}`);
+  const lista = await res.json();
+
+  ul.innerHTML = "";
+  if (lista.length === 0) {
+    ul.innerHTML = `<li style="color:#94a3b8; cursor:default;">Nenhum funcionário encontrado</li>`;
+  } else {
+    lista.forEach(f => {
+      ul.innerHTML += `
+        <li onclick="selecionarAtendenteFixo('${dataIso}', ${f.id}, '${f.nome}', '${f.matricula || ''}')">
+          <b>${f.nome}</b> <small>(${f.matricula || '-'})</small>
+        </li>
+      `;
+    });
+  }
+  ul.style.display = "block";
+}
+
+function selecionarAtendenteFixo(dataIso, id, nome, matricula) {
+  document.getElementById(`atend_input_${dataIso}`).value = `${nome} (${matricula})`;
+  document.getElementById(`atend_id_${dataIso}`).value = id;
+  document.getElementById(`atend_list_${dataIso}`).style.display = "none";
+}
+
+async function salvarAtendimentoFixo(dataIso) {
+  const f_id = document.getElementById(`atend_id_${dataIso}`).value;
+  const obs = document.getElementById(`atend_obs_${dataIso}`).value;
+
+  const payload = {
+    data: dataIso,
+    aba: abaAtendimentoAtual,
+    funcionario_id: f_id ? parseInt(f_id) : null,
+    observacao: obs
+  };
+
+  const res = await fetch('/api/atendimentos_fixos', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+
+  const data = await res.json();
+  if (res.ok) {
+    alert("Atendimento registrado!");
+  } else {
+    alert(data.erro || "Erro ao salvar atendimento.");
+  }
 }
 
 // MODAL DE LANÇAMENTO DIÁRIO
@@ -568,7 +745,7 @@ function fecharModalInfoFuncionario() {
   document.getElementById("modalInfoFuncionario").style.display = "none";
 }
 
-// 3. QUADRO DE TAREFAS
+// 3. QUADRO DE TAREFAS (EDIÇÃO COMPLETA)
 async function carregarTarefas() {
   const res = await fetch('/api/tarefas');
   listaTarefasCache = await res.json();
@@ -593,7 +770,10 @@ function renderizarKanban() {
         ${t.descricao ? `<div class="card-desc">${t.descricao}</div>` : ''}
         <div class="card-footer">
           <span class="card-user">👤 ${t.responsavel || 'Sem dono'}</span>
-          <button class="btn-remove-os" onclick="excluirTarefa(${t.id})">✕</button>
+          <div>
+            <button class="btn-secondary-sm" onclick="editarTarefa(${t.id})">✏️ Editar</button>
+            <button class="btn-remove-os" onclick="excluirTarefa(${t.id})">✕</button>
+          </div>
         </div>
       </div>
     `;
@@ -628,26 +808,51 @@ async function drop(ev, novoStatus) {
   carregarTarefas();
 }
 
-function abrirModalNovaTarefa() { document.getElementById('modalTarefa').style.display = 'block'; }
+function abrirModalNovaTarefa() { 
+  document.getElementById('tarId').value = '';
+  document.getElementById('formTarefa').reset();
+  document.getElementById('tituloModalTarefa').innerText = "Nova Tarefa";
+  document.getElementById('modalTarefa').style.display = 'block'; 
+}
+
+function editarTarefa(id) {
+  const t = listaTarefasCache.find(item => item.id === id);
+  if (!t) return;
+
+  document.getElementById('tarId').value = t.id;
+  document.getElementById('tarTitulo').value = t.titulo || '';
+  document.getElementById('tarDescricao').value = t.descricao || '';
+  document.getElementById('tarResponsavel').value = t.responsavel || '';
+  document.getElementById('tarPrioridade').value = t.prioridade || 'Média';
+  document.getElementById('tarStatus').value = t.status || 'A Fazer';
+
+  document.getElementById('tituloModalTarefa').innerText = "Editar Tarefa";
+  document.getElementById('modalTarefa').style.display = 'block';
+}
+
 function fecharModalTarefa() { document.getElementById('modalTarefa').style.display = 'none'; }
 
 async function salvarTarefa(e) {
   e.preventDefault();
+  const id = document.getElementById('tarId').value;
   const payload = {
+    id: id ? parseInt(id) : null,
     titulo: document.getElementById('tarTitulo').value,
     descricao: document.getElementById('tarDescricao').value,
     responsavel: document.getElementById('tarResponsavel').value,
-    prioridade: document.getElementById('tarPrioridade').value
+    prioridade: document.getElementById('tarPrioridade').value,
+    status: document.getElementById('tarStatus').value
   };
 
+  const method = id ? 'PUT' : 'POST';
+
   await fetch('/api/tarefas', {
-    method: 'POST',
+    method: method,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
   });
 
   fecharModalTarefa();
-  document.getElementById('formTarefa').reset();
   carregarTarefas();
 }
 

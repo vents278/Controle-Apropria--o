@@ -25,8 +25,6 @@ FERIADOS = [
     "2026-10-12", "2026-11-02", "2026-11-15", "2026-11-20", "2026-12-25"
 ]
 
-# --- DECORADORES DE AUTENTICAÇÃO E PERMISSÃO ---
-
 def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
@@ -172,7 +170,7 @@ def buscar_dados_pendencias(ano, mes, supervisor_filtro, tipo_filtro, busca_func
 
     return pendencias
 
-# --- AUTENTICAÇÃO E SESSÃO ---
+# --- AUTENTICAÇÃO, SESSÃO E TROCA DE SENHA ---
 
 @app.route('/')
 def index():
@@ -196,14 +194,13 @@ def login():
 
         user = res.data[0]
         
-        # Validação segura da senha
         if user.get('senha_hash') and user['senha_hash'] != senha:
             try:
                 valid_res = supabase.rpc('verificar_hash', {'senha': senha, 'hash': user['senha_hash']}).execute()
                 if not valid_res.data:
                     return jsonify({"erro": "Credenciais inválidas."}), 401
             except Exception:
-                pass
+                return jsonify({"erro": "Credenciais inválidas."}), 401
 
         session['usuario_id'] = user['id']
         session['usuario_nome'] = user['nome']
@@ -221,7 +218,7 @@ def login():
                 "modulos": user.get('modulos') or []
             }
         })
-    except Exception as e:
+    except Exception:
         return jsonify({"erro": "Erro de conexão com o banco de dados."}), 500
 
 @app.route('/api/logout', methods=['POST'])
@@ -244,7 +241,100 @@ def usuario_atual():
         }
     })
 
-# --- GESTÃO DE USUÁRIOS (EXCLUSIVO PARA ADMIN) ---
+@app.route('/api/alterar_senha', methods=['POST'])
+@login_required
+def alterar_senha():
+    data = request.json or {}
+    senha_atual = data.get('senha_atual', '').strip()
+    nova_senha = data.get('nova_senha', '').strip()
+
+    if not senha_atual or not nova_senha:
+        return jsonify({"erro": "Informe a senha atual e a nova senha."}), 400
+
+    u_id = session.get('usuario_id')
+    res = supabase.table('usuarios').select('senha_hash').eq('id', u_id).execute()
+    
+    if not res.data:
+        return jsonify({"erro": "Usuário não encontrado."}), 404
+
+    senha_salva = res.data[0].get('senha_hash')
+    if senha_salva != senha_atual:
+        return jsonify({"erro": "A senha atual está incorreta."}), 400
+
+    supabase.table('usuarios').update({'senha_hash': nova_senha}).eq('id', u_id).execute()
+    return jsonify({"mensagem": "Senha alterada com sucesso!"}), 200
+
+# --- ATENDIMENTOS FIXOS ---
+
+@app.route('/api/atendimentos_fixos', methods=['GET', 'POST'])
+@login_required
+def gerenciar_atendimentos_fixos():
+    if request.method == 'GET':
+        aba = request.args.get('aba', 'FACILITIES')
+        ano = int(request.args.get('ano', date.today().year))
+        mes = int(request.args.get('mes', date.today().month))
+
+        _, num_dias = calendar.monthrange(ano, mes)
+        inicio = f"{ano}-{mes:02d}-01"
+        fim = f"{ano}-{mes:02d}-{num_dias:02d}"
+
+        try:
+            res = supabase.table('atendimentos_fixos')\
+                .select('id, data, aba, funcionario_id, observacao, funcionarios(nome, matricula)')\
+                .eq('aba', aba).gte('data', inicio).lte('data', fim).order('data').execute()
+            
+            mapa_atendimentos = {item['data']: item for item in res.data}
+        except Exception:
+            mapa_atendimentos = {}
+
+        dias = []
+        for d in range(1, num_dias + 1):
+            d_iso = f"{ano}-{mes:02d}-{d:02d}"
+            dt_obj = datetime.strptime(d_iso, "%Y-%m-%d")
+            semana = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"][dt_obj.weekday()]
+            reg = mapa_atendimentos.get(d_iso, {})
+
+            dias.append({
+                "data": d_iso,
+                "dia_num": d,
+                "dia_semana": semana,
+                "funcionario_id": reg.get('funcionario_id'),
+                "funcionario_nome": reg.get('funcionarios', {}).get('nome') if reg.get('funcionarios') else None,
+                "funcionario_matricula": reg.get('funcionarios', {}).get('matricula') if reg.get('funcionarios') else None,
+                "observacao": reg.get('observacao', '')
+            })
+
+        return jsonify({"ano": ano, "mes": mes, "aba": aba, "dias": dias})
+
+    elif request.method == 'POST':
+        data = request.json or {}
+        d_iso = data.get('data')
+        aba = data.get('aba')
+        f_id = data.get('funcionario_id')
+        obs = data.get('observacao', '')
+
+        if not d_iso or not aba:
+            return jsonify({"erro": "Data e aba são obrigatórias."}), 400
+
+        try:
+            res_existente = supabase.table('atendimentos_fixos').select('id').eq('data', d_iso).eq('aba', aba).execute()
+            if res_existente.data:
+                supabase.table('atendimentos_fixos').update({
+                    'funcionario_id': f_id,
+                    'observacao': obs
+                }).eq('data', d_iso).eq('aba', aba).execute()
+            else:
+                supabase.table('atendimentos_fixos').insert({
+                    'data': d_iso,
+                    'aba': aba,
+                    'funcionario_id': f_id,
+                    'observacao': obs
+                }).execute()
+            return jsonify({"mensagem": "Atendimento fixo salvo com sucesso!"}), 200
+        except Exception:
+            return jsonify({"erro": "Não foi possível salvar o atendimento. Verifique a tabela no banco."}), 500
+
+# --- GESTÃO DE USUÁRIOS (ADMIN) ---
 
 @app.route('/api/usuarios', methods=['GET', 'POST', 'DELETE'])
 @admin_required
@@ -294,7 +384,7 @@ def buscar_funcionarios():
     if q:
         query = query.or_(f"nome.ilike.%{q}%,matricula.ilike.%{q}%")
     
-    res = query.order('nome').limit(10).execute()
+    res = query.order('nome').limit(15).execute()
     return jsonify(res.data)
 
 @app.route('/api/funcionarios', methods=['GET', 'POST', 'PUT', 'DELETE'])
@@ -314,7 +404,7 @@ def gerenciar_funcionarios():
             supabase.table('funcionarios').insert(payload).execute()
             return jsonify({"mensagem": "Funcionário cadastrado!"}), 201
         except Exception:
-            return jsonify({"erro": "Erro ao cadastrar funcionário. Verifique se a matrícula já existe."}), 400
+            return jsonify({"erro": "Erro ao cadastrar funcionário."}), 400
 
     elif request.method == 'PUT':
         data = request.json
@@ -636,7 +726,7 @@ def obter_dashboard():
         }
     })
 
-# --- QUADRO DE TAREFAS ---
+# --- QUADRO DE TAREFAS (EDIÇÃO COMPLETA) ---
 
 @app.route('/api/tarefas', methods=['GET', 'POST', 'PUT', 'DELETE'])
 @login_required
@@ -652,22 +742,31 @@ def gerenciar_tarefas():
             "descricao": data.get('descricao'),
             "responsavel": data.get('responsavel'),
             "prioridade": data.get('prioridade'),
-            "status": 'A Fazer'
+            "status": data.get('status', 'A Fazer')
         }
         supabase.table('tarefas').insert(payload).execute()
-        return jsonify({"mensagem": "Tarefa criada!"}), 201
+        return jsonify({"mensagem": "Tarefa criada com sucesso!"}), 201
 
     elif request.method == 'PUT':
         data = request.json
-        supabase.table('tarefas').update({'status': data.get('status')}).eq('id', data.get('id')).execute()
-        return jsonify({"mensagem": "Status atualizado!"}), 200
+        t_id = data.get('id')
+        
+        payload = {}
+        if 'titulo' in data: payload['titulo'] = data['titulo']
+        if 'descricao' in data: payload['descricao'] = data['descricao']
+        if 'responsavel' in data: payload['responsavel'] = data['responsavel']
+        if 'prioridade' in data: payload['prioridade'] = data['prioridade']
+        if 'status' in data: payload['status'] = data['status']
+
+        supabase.table('tarefas').update(payload).eq('id', t_id).execute()
+        return jsonify({"mensagem": "Tarefa atualizada com sucesso!"}), 200
 
     elif request.method == 'DELETE':
         tarefa_id = request.args.get('id')
         supabase.table('tarefas').delete().eq('id', tarefa_id).execute()
         return jsonify({"mensagem": "Tarefa excluída!"}), 200
 
-# --- DETALHES E SALVAMENTO ---
+# --- DETALHES E SALVAMENTO DIÁRIO ---
 
 @app.route('/api/lancamento/detalhes', methods=['GET'])
 @login_required
