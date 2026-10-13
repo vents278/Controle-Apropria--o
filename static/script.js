@@ -402,6 +402,10 @@ async function carregarGrade() {
   const supervisor = document.getElementById("filtroSupervisor").value;
 
   const res = await fetch(`/api/grade?ano=${ano}&mes=${mes}&supervisor=${encodeURIComponent(supervisor)}`);
+  if (!res.ok) {
+    document.getElementById("gridBody").innerHTML = `<tr><td colspan="34" style="padding:15px; color:#dc2626;">Erro ao carregar grade (${res.status}). Verifique a conexão com o banco.</td></tr>`;
+    return;
+  }
   dadosGradeCache = await res.json();
 
   const selectSup = document.getElementById("filtroSupervisor");
@@ -548,6 +552,10 @@ async function abrirModal(fId, fNome, dataIso) {
   document.getElementById("modalDataTitulo").innerText = dataIso.split('-').reverse().join('/');
 
   const res = await fetch(`/api/lancamento/detalhes?funcionario_id=${fId}&data=${dataIso}`);
+  if (!res.ok) {
+    alert("Erro ao carregar detalhes do lançamento.");
+    return;
+  }
   const dados = await res.json();
 
   document.getElementById("modalSituacao").value = dados.situacao || "Presente";
@@ -640,6 +648,10 @@ async function carregarPendencias() {
 
   const url = `/api/pendencias?ano=${ano}&mes=${mes}&supervisor=${encodeURIComponent(supervisor)}&tipo=${encodeURIComponent(tipo)}&funcionario=${encodeURIComponent(func)}&data_inicio=${dataInicio}&data_fim=${dataFim}`;
   const res = await fetch(url);
+  if (!res.ok) {
+    document.getElementById("tabelaPendencias").innerHTML = `<tr><td colspan="9" style="padding:15px; color:#dc2626;">Erro ao carregar pendências (${res.status}). Verifique a conexão com o banco.</td></tr>`;
+    return;
+  }
   const data = await res.json();
 
   const selectSup = document.getElementById("filtroPendenciasSupervisor");
@@ -692,17 +704,26 @@ function exportarPendenciasExcel() {
 }
 
 async function sanarEsumir(fId, dataIso) {
-  await fetch('/api/pendencias/sanar', {
+  const res = await fetch('/api/pendencias/sanar', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ funcionario_id: fId, data: dataIso })
   });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    alert(err.erro || "Erro ao sanar pendência. Lançamento não encontrado.");
+    return;
+  }
   carregarPendencias();
 }
 
 // FICHA DO FUNCIONÁRIO
 async function abrirModalInfoFuncionario(fId) {
   const res = await fetch(`/api/funcionarios/${fId}/detalhes`);
+  if (!res.ok) {
+    alert("Erro ao carregar ficha do funcionário.");
+    return;
+  }
   const data = await res.json();
   const f = data.info;
 

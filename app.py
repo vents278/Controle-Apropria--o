@@ -1,7 +1,7 @@
 import os
 import calendar
 import io
-from functools import wraps
+from functools import wraps, lru_cache
 from datetime import datetime, date
 from flask import Flask, render_template, request, jsonify, send_file, session
 from dotenv import load_dotenv
@@ -20,10 +20,14 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-FERIADOS = [
+FERIADOS = {
     "2026-01-01", "2026-04-21", "2026-05-01", "2026-09-07",
     "2026-10-12", "2026-11-02", "2026-11-15", "2026-11-20", "2026-12-25"
-]
+}
+
+@lru_cache(maxsize=2048)
+def _dia_semana_cached(data_iso):
+    return datetime.strptime(data_iso, "%Y-%m-%d").weekday()
 
 def login_required(f):
     @wraps(f)
@@ -42,8 +46,7 @@ def admin_required(f):
     return decorated_function
 
 def calcular_regras_horas(data_iso, horas_trabalhadas):
-    dt = datetime.strptime(data_iso, "%Y-%m-%d")
-    dia_semana = dt.weekday()
+    dia_semana = _dia_semana_cached(data_iso)
     is_feriado = data_iso in FERIADOS
 
     carga_padrao = 0.0
@@ -82,12 +85,15 @@ def buscar_dados_pendencias(ano, mes, supervisor_filtro, tipo_filtro, busca_func
         inicio = f"{ano}-{mes:02d}-01"
         fim = f"{ano}-{mes:02d}-{num_dias:02d}"
 
-    query = supabase.table("presencas").select("data, situacao, status_pendencia, funcionarios!inner(id, nome, matricula, supervisor)").gte("data", inicio).lte("data", fim)
-    
+    base_sel = "data, funcionario_id, situacao, status_pendencia, funcionarios(id, nome, matricula, supervisor)"
     if supervisor_filtro:
-        query = query.eq("funcionarios.supervisor", supervisor_filtro)
-
-    res_presencas = query.execute().data
+        res_ids = supabase.table("funcionarios").select("id").eq("supervisor", supervisor_filtro).execute().data
+        ids_supervisor = [r["id"] for r in (res_ids or [])]
+        if not ids_supervisor:
+            return []
+        res_presencas = supabase.table("presencas").select(base_sel).gte("data", inicio).lte("data", fim).in_("funcionario_id", ids_supervisor).execute().data
+    else:
+        res_presencas = supabase.table("presencas").select(base_sel).gte("data", inicio).lte("data", fim).execute().data
     res_apropriacoes = supabase.table("apropriacoes").select("funcionario_id, data, horas").gte("data", inicio).lte("data", fim).execute().data
 
     horas_map = {}
@@ -98,7 +104,9 @@ def buscar_dados_pendencias(ano, mes, supervisor_filtro, tipo_filtro, busca_func
     pendencias = []
 
     for p in res_presencas:
-        f = p["funcionarios"]
+        f = p.get("funcionarios")
+        if not f:
+            continue
         f_id = f["id"]
         d_data = p["data"]
         nome = f["nome"]
@@ -419,8 +427,12 @@ def obter_detalhes_funcionario(func_id):
         return jsonify({"erro": "Funcionário não encontrado."}), 404
 
     f_info = res_func.data[0]
-    res_presenca = supabase.table('presencas').select('data, situacao, observacao').eq('funcionario_id', func_id).order('data', desc=True).limit(10).execute().data
-    res_aprop = supabase.table('apropriacoes').select('data, horas').eq('funcionario_id', func_id).execute().data
+    res_presenca = supabase.table('presencas').select('data, situacao, observacao').eq('funcionario_id', func_id).order('data', desc=True).limit(10).execute().data or []
+    if res_presenca:
+        datas = sorted(p['data'] for p in res_presenca)
+        res_aprop = supabase.table('apropriacoes').select('data, horas').eq('funcionario_id', func_id).gte('data', datas[0]).lte('data', datas[-1]).execute().data or []
+    else:
+        res_aprop = []
 
     horas_map = {}
     for ap in res_aprop:
@@ -455,12 +467,13 @@ def salvar_lancamento_os():
 
     obs_texto = f"OS: {ordem_servico} - {descricao}" if descricao else f"OS: {ordem_servico}"
 
+    res_exist = supabase.table('presencas').select('funcionario_id, observacao').eq('data', data_reg).in_('funcionario_id', funcionarios_ids).execute()
+    obs_map = {r['funcionario_id']: (r.get('observacao') or '') for r in (res_exist.data or [])}
+
     for f_id in funcionarios_ids:
-        res_p = supabase.table('presencas').select('observacao').eq('data', data_reg).eq('funcionario_id', f_id).execute()
-        
-        if res_p.data:
-            obs_atual = res_p.data[0].get('observacao') or ''
-            nova_obs = f"{obs_atual} | {obs_texto}" if obs_atual else obs_texto
+        obs_atual = obs_map.get(f_id, '')
+        nova_obs = f"{obs_atual} | {obs_texto}" if obs_atual else obs_texto
+        if f_id in obs_map:
             supabase.table('presencas').update({
                 'situacao': 'Presente',
                 'observacao': nova_obs,
@@ -475,12 +488,15 @@ def salvar_lancamento_os():
                 'status_pendencia': 'PENDENTE'
             }).execute()
 
-        supabase.table('apropriacoes').insert({
+    supabase.table('apropriacoes').insert([
+        {
             'data': data_reg,
             'funcionario_id': f_id,
             'ordem_servico': ordem_servico,
             'horas': horas
-        }).execute()
+        }
+        for f_id in funcionarios_ids
+    ]).execute()
 
     return jsonify({"mensagem": f"OS {ordem_servico} lançada com sucesso!"}), 200
 
@@ -489,24 +505,45 @@ def salvar_lancamento_os():
 @app.route('/api/grade', methods=['GET'])
 @login_required
 def obter_grade():
-    ano = int(request.args.get('ano', date.today().year))
-    mes = int(request.args.get('mes', date.today().month))
+    try:
+        ano = int(request.args.get('ano', date.today().year))
+        mes = int(request.args.get('mes', date.today().month))
+    except (TypeError, ValueError):
+        return jsonify({"erro": "Parâmetros ano/mes inválidos."}), 400
     supervisor_filtro = request.args.get('supervisor', '')
 
-    _, num_dias = calendar.monthrange(ano, mes)
+    try:
+        _, num_dias = calendar.monthrange(ano, mes)
+    except calendar.IllegalMonthError:
+        return jsonify({"erro": "Mês inválido."}), 400
     inicio_mes = f"{ano}-{mes:02d}-01"
     fim_mes = f"{ano}-{mes:02d}-{num_dias:02d}"
 
-    q_func = supabase.table('funcionarios').select('id, matricula, nome, cargo, atuacao, supervisor')
-    if supervisor_filtro:
-        q_func = q_func.eq('supervisor', supervisor_filtro)
-    funcionarios = q_func.order('atuacao').order('nome').execute().data
+    try:
+        q_func = supabase.table('funcionarios').select('id, matricula, nome, cargo, atuacao, supervisor')
+        if supervisor_filtro:
+            q_func = q_func.eq('supervisor', supervisor_filtro)
+        funcionarios = q_func.order('atuacao').order('nome').execute().data or []
 
-    res_sup = supabase.table('funcionarios').select('supervisor').not_.is_('supervisor', 'null').neq('supervisor', '').execute()
-    supervisores = sorted(list({r['supervisor'] for r in res_sup.data if r.get('supervisor')}))
+        res_sup = supabase.table('funcionarios').select('supervisor').not_.is_('supervisor', 'null').neq('supervisor', '').execute()
+        supervisores = sorted(list({r['supervisor'] for r in (res_sup.data or []) if r.get('supervisor')}))
 
-    res_presencas = supabase.table('presencas').select('funcionario_id, data, situacao, observacao, status_pendencia').gte('data', inicio_mes).lte('data', fim_mes).execute().data
-    res_apropriacoes = supabase.table('apropriacoes').select('funcionario_id, data, horas').gte('data', inicio_mes).lte('data', fim_mes).execute().data
+        ids_escopo = [f['id'] for f in funcionarios] if supervisor_filtro else None
+
+        q_pres = supabase.table('presencas').select('funcionario_id, data, situacao, observacao, status_pendencia').gte('data', inicio_mes).lte('data', fim_mes)
+        q_aprop = supabase.table('apropriacoes').select('funcionario_id, data, horas').gte('data', inicio_mes).lte('data', fim_mes)
+        if ids_escopo is not None:
+            if not ids_escopo:
+                return jsonify({
+                    "num_dias": num_dias, "ano": ano, "mes": mes,
+                    "funcionarios": [], "supervisores": supervisores, "lancamentos": {}
+                })
+            q_pres = q_pres.in_('funcionario_id', ids_escopo)
+            q_aprop = q_aprop.in_('funcionario_id', ids_escopo)
+        res_presencas = q_pres.execute().data or []
+        res_apropriacoes = q_aprop.execute().data or []
+    except Exception:
+        return jsonify({"erro": "Falha ao consultar o banco de dados."}), 500
 
     horas_map = {}
     for ap in res_apropriacoes:
@@ -549,18 +586,27 @@ def obter_grade():
 @app.route('/api/pendencias', methods=['GET'])
 @login_required
 def obter_pendencias():
-    ano = int(request.args.get('ano', date.today().year))
-    mes = int(request.args.get('mes', date.today().month))
+    try:
+        ano = int(request.args.get('ano', date.today().year))
+        mes = int(request.args.get('mes', date.today().month))
+    except (TypeError, ValueError):
+        return jsonify({"erro": "Parâmetros ano/mes inválidos."}), 400
     supervisor_filtro = request.args.get('supervisor', '')
     tipo_filtro = request.args.get('tipo', '')
     busca_func = request.args.get('funcionario', '')
     data_inicio = request.args.get('data_inicio', '')
     data_fim = request.args.get('data_fim', '')
 
-    res_sup = supabase.table('funcionarios').select('supervisor').not_.is_('supervisor', 'null').neq('supervisor', '').execute()
-    supervisores = sorted(list({r['supervisor'] for r in res_sup.data if r.get('supervisor')}))
+    try:
+        res_sup = supabase.table('funcionarios').select('supervisor').not_.is_('supervisor', 'null').neq('supervisor', '').execute()
+        supervisores = sorted(list({r['supervisor'] for r in (res_sup.data or []) if r.get('supervisor')}))
+    except Exception:
+        supervisores = []
 
-    pendencias = buscar_dados_pendencias(ano, mes, supervisor_filtro, tipo_filtro, busca_func, data_inicio, data_fim)
+    try:
+        pendencias = buscar_dados_pendencias(ano, mes, supervisor_filtro, tipo_filtro, busca_func, data_inicio, data_fim)
+    except Exception:
+        return jsonify({"erro": "Falha ao consultar pendências no banco de dados."}), 500
 
     return jsonify({
         "pendencias": pendencias,
@@ -616,11 +662,16 @@ def exportar_pendencias_excel():
 @app.route('/api/pendencias/sanar', methods=['POST'])
 @login_required
 def sanar_pendencia():
-    data_req = request.json
+    data_req = request.json or {}
     f_id = data_req.get('funcionario_id')
     data_reg = data_req.get('data')
 
-    supabase.table('presencas').update({'status_pendencia': 'SANADA'}).eq('funcionario_id', f_id).eq('data', data_reg).execute()
+    if not f_id or not data_reg:
+        return jsonify({"erro": "funcionario_id e data são obrigatórios."}), 400
+
+    res = supabase.table('presencas').update({'status_pendencia': 'SANADA'}).eq('funcionario_id', f_id).eq('data', data_reg).execute()
+    if not res.data:
+        return jsonify({"erro": "Lançamento não encontrado para sanar."}), 404
     return jsonify({"mensagem": "Pendência sanada com sucesso!"}), 200
 
 # --- DASHBOARD ---
@@ -628,14 +679,21 @@ def sanar_pendencia():
 @app.route('/api/dashboard', methods=['GET'])
 @login_required
 def obter_dashboard():
-    ano = int(request.args.get('ano', date.today().year))
-    mes = int(request.args.get('mes', date.today().month))
-
-    _, num_dias = calendar.monthrange(ano, mes)
+    try:
+        ano = int(request.args.get('ano', date.today().year))
+        mes = int(request.args.get('mes', date.today().month))
+        _, num_dias = calendar.monthrange(ano, mes)
+    except (TypeError, ValueError, calendar.IllegalMonthError):
+        return jsonify({"erro": "Parâmetros ano/mes inválidos."}), 400
     inicio_mes = f"{ano}-{mes:02d}-01"
     fim_mes = f"{ano}-{mes:02d}-{num_dias:02d}"
 
-    res_treinamento = supabase.table('presencas').select('data, funcionario_id').gte('data', inicio_mes).lte('data', fim_mes).eq('situacao', 'Treinamento').execute().data
+    try:
+        res_treinamento = supabase.table('presencas').select('data, funcionario_id').gte('data', inicio_mes).lte('data', fim_mes).eq('situacao', 'Treinamento').execute().data or []
+        res_presencas_db = supabase.table('presencas').select('data, funcionario_id, situacao, status_pendencia').gte('data', inicio_mes).lte('data', fim_mes).execute().data or []
+        res_apropriacoes_db = supabase.table('apropriacoes').select('funcionario_id, data, horas').gte('data', inicio_mes).lte('data', fim_mes).execute().data or []
+    except Exception:
+        return jsonify({"erro": "Falha ao consultar o banco de dados."}), 500
 
     treinamento_por_dia = {}
     func_treinamento_unicos = set()
@@ -652,8 +710,8 @@ def obter_dashboard():
         for d, funcs in sorted(treinamento_por_dia.items())
     ]
 
-    res_presencas = supabase.table('presencas').select('data, funcionario_id, situacao, status_pendencia').gte('data', inicio_mes).lte('data', fim_mes).execute().data
-    res_apropriacoes = supabase.table('apropriacoes').select('funcionario_id, data, horas').gte('data', inicio_mes).lte('data', fim_mes).execute().data
+    res_presencas = res_presencas_db
+    res_apropriacoes = res_apropriacoes_db
 
     horas_map = {}
     for ap in res_apropriacoes:
@@ -671,16 +729,16 @@ def obter_dashboard():
         st_pend = p.get('status_pendencia') or 'PENDENTE'
         horas = horas_map.get(f"{f_id}_{d_data}", 0.0)
 
+        calc = calcular_regras_horas(d_data, horas) if situacao in ['Presente', 'Deslocado'] else None
+
         if st_pend != "SANADA":
             if situacao == 'Deslocado' and horas == 0:
                 qtd_pendencias += 1
-            elif situacao in ['Presente', 'Deslocado']:
-                calc = calcular_regras_horas(d_data, horas)
+            elif calc is not None:
                 if calc["horas_100"] > 0 or calc["horas_70"] > 0 or calc["horas_50"] > 0 or (calc["carga_padrao"] > 0 and horas < calc["carga_padrao"]):
                     qtd_pendencias += 1
 
-        if situacao in ['Presente', 'Deslocado']:
-            calc = calcular_regras_horas(d_data, horas)
+        if calc is not None:
             if calc["horas_50"] > 0:
                 func_extra_50.add(f_id)
                 total_horas_extras += calc["horas_50"]
